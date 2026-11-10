@@ -9,8 +9,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="css/style.css?v=16">
-<link rel="stylesheet" href="css/app.css?v=16">
+<link rel="stylesheet" href="css/style.css?v=17">
+<link rel="stylesheet" href="css/app.css?v=17">
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -30,6 +30,7 @@
       <a href="#vista-3d" class="x-tab" data-view="vista-3d">Vista 3D</a>
       <a href="#scada" class="x-tab" data-view="scada">Sala de control</a>
       <a href="#desafio" class="x-tab" data-view="desafio">Desafío</a>
+      <a href="#aula" class="x-tab" data-view="aula">Aula</a>
       <a href="#ingenieria" class="x-tab" data-view="ingenieria">SCADA</a>
       <a href="index.html" class="x-tab x-tab-build" id="x-build">Constructor</a>
     </nav>
@@ -181,6 +182,11 @@
           <p class="g-best" id="g-best"></p>
         </div>
       </div>
+    </section>
+
+    <!-- Aula: docentes y alumnos -->
+    <section id="view-aula" class="x-view x-aula" data-view="aula" hidden>
+      <div id="aula-root" class="au-wrap"></div>
     </section>
 
     <!-- Ingeniería: consola original -->
@@ -451,6 +457,7 @@
         <button type="button" class="x-btn x-btn-hot" data-intro="desafio">Desafío</button>
         <button type="button" class="x-btn" data-intro="scada">Simulador</button>
         <button type="button" class="x-btn" data-intro="vista-3d">Vista 3D</button>
+        <button type="button" class="x-btn" data-intro="aula">Aula · docentes y alumnos</button>
       </div>
       <p class="x-intro-note">Simulación de entrenamiento con valores estimados. No es un SCADA en vivo ni representa a ninguna operadora.</p>
     </div>
@@ -472,22 +479,24 @@
   </div>
 </div>
 
+<script src="js/lic.js?v=17"></script>
 <script>window.OB_LINKS={sim:"simulador.html",builder:"index.html"};if(!/[?&]ducto=/.test(location.search))location.replace("index.html");</script>
-<script src="js/stations-data.js?v=16"></script>
-<script src="js/pipeline-gen.js?v=16"></script>
-<script src="js/custom-loader.js?v=16"></script>
-<script src="js/sim.js?v=16"></script>
-<script src="js/ui.js?v=16"></script>
-<script src="js/geo.js?v=16"></script>
-<script src="js/alarms.js?v=16"></script>
-<script src="js/scada.js?v=16"></script>
-<script src="js/game.js?v=16"></script>
-<script src="js/ing-ext.js?v=16"></script>
-<script src="js/equip.js?v=16"></script>
-<script src="js/faults.js?v=16"></script>
-<script src="js/pidfp.js?v=16"></script>
-<script src="js/ing.js?v=16"></script>
-<script src="js/app.js?v=16"></script>
-<script type="module" src="js/view3d.js?v=16"></script>
+<script src="js/stations-data.js?v=17"></script>
+<script src="js/pipeline-gen.js?v=17"></script>
+<script src="js/custom-loader.js?v=17"></script>
+<script src="js/sim.js?v=17"></script>
+<script src="js/ui.js?v=17"></script>
+<script src="js/geo.js?v=17"></script>
+<script src="js/alarms.js?v=17"></script>
+<script src="js/scada.js?v=17"></script>
+<script src="js/game.js?v=17"></script>
+<script src="js/ing-ext.js?v=17"></script>
+<script src="js/equip.js?v=17"></script>
+<script src="js/faults.js?v=17"></script>
+<script src="js/pidfp.js?v=17"></script>
+<script src="js/ing.js?v=17"></script>
+<script src="js/aula.js?v=17"></script>
+<script src="js/app.js?v=17"></script>
+<script type="module" src="js/view3d.js?v=17"></script>
 </body>
 </html>
