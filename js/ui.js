@@ -779,7 +779,7 @@
       html += `<p class="muted" style="font-size:11px">Regla: ≥${need} principales en línea (ahora ${onM}/${mains.length}). Boosters = aspiración, no cuentan.</p>`;
       for (const pu of st.pumps) {
         const isB = pu.role === 'booster' || pu.role === 'booster_suction';
-        const tag = isB ? ' · aspiración' : (pu.reserve ? ' · reserva' : '');
+        const tag = isB ? ' · aspiración' : (!pu.online ? ' · disponible' : '');
         const boostTxt = isB
           ? (pu.suctionAssistKgCm2 != null ? ' · succión +' + pu.suctionAssistKgCm2 : '')
           : (pu.boostKgCm2 != null ? ' · disc +' + pu.boostKgCm2 : '');

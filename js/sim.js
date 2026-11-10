@@ -1579,19 +1579,16 @@
         }
 
         if (st.pumps && st.pumps.length) {
-          const offline = st.pumps.filter((pu) => !pu.online && !pu.reserve);
-          if (state.failedStations[st.id] || offline.length === st.pumps.length) {
-            next.push({
-              id: 'pumps-off-' + st.id,
-              severity: 'critical',
-              text: `Falla / bombas fuera: ${st.name}`,
-            });
-          } else if (offline.length) {
-            next.push({
-              id: 'pump-off-' + st.id,
-              severity: 'warn',
-              text: `${offline.length} bomba(s) detenida(s) en ${st.name}`,
-            });
+          // v15: la reserva no es fija; se compara la cantidad en marcha con la cantidad de servicio
+          const mainsAll = st.pumps.filter((pu) => !isBoosterRole(pu.role));
+          const onN = mainsAll.filter((pu) => pu.online).length;
+          const nServ = Math.max(1, mainsAll.filter((pu) => !pu.reserve).length);
+          if (state.failedStations[st.id]) {
+            next.push({ id: 'pumps-off-' + st.id, severity: 'critical', text: `Falla / bombas fuera: ${st.name}` });
+          } else if (onN === 0) {
+            next.push({ id: 'pumps-idle-' + st.id, severity: 'warn', text: `${st.name}: sin bombas en marcha` });
+          } else if (onN < nServ) {
+            next.push({ id: 'pump-off-' + st.id, severity: 'warn', text: `${nServ - onN} bomba(s) menos que las de servicio en ${st.name}` });
           }
         }
 
@@ -2541,9 +2538,17 @@
       checkAlarms();
     }
 
-    function evaluatePumpRuleAndStrategy(st) {
+    function evaluatePumpRuleAndStrategy(st, starting) {
       if (!st || !st.pumps) return;
       const mains = mainsOnline(st);
+      // v15: en un arranque las bombas se suman de a una: no se aplica la regla de N bombas (solo al parar)
+      if (starting) {
+        if (mains.on >= 1 && (state.failedStations[st.id] || (st.id === 'ph' && state.phFailed)) && !(state.tripCause && state.tripCause[st.id])) {
+          delete state.failedStations[st.id];
+          if (st.id === 'ph') { state.phFailed = false; state.cdTempHead = false; }
+        }
+        return;
+      }
       const need = minMainsRequired(st);
       const mainsOffRule = mains.on < Math.min(need, mains.n || need);
       const allMainsOff = mains.on === 0;
@@ -2580,7 +2585,7 @@
           (isBoosterRole(p.role) ? ' (booster aspiración)' : ''),
         'pump'
       );
-      evaluatePumpRuleAndStrategy(st);
+      evaluatePumpRuleAndStrategy(st, p.online);
       if (st.id === 'ph' && isBoosterRole(p.role) && !p.online) {
         const assist = suctionAssistKg(st);
         if (assist < 0.5) {
@@ -2604,7 +2609,7 @@
           `${st.shortName || st.name}: ${p.name} → ${p.online ? 'EN MARCHA' : 'PARADA'}`,
           'pump'
         );
-        evaluatePumpRuleAndStrategy(st);
+        evaluatePumpRuleAndStrategy(st, p.online);
         computeHydraulics();
         checkAlarms();
         updateDuctMotionFlag();
@@ -2828,15 +2833,15 @@
       state.surgeBoostKg = 0;
       state.surgeRemainSec = 0;
       state.aspAlarmStations = {};
+      // v15: el reinicio deja todas las bombas paradas; el operador elige cuáles arrancar
       for (const st of state.stations) {
         if (!st.pumps) continue;
-        for (const p of st.pumps) {
-          if (p.reserve) p.online = false;
-          else p.online = true;
-        }
+        for (const p of st.pumps) p.online = false;
       }
       const meta = state.config._meta || {};
-      state.globalFlowSetpoint = meta.defaultPhCabeceraM3h || 650;
+      state.globalFlowSetpoint = state.startupQ != null ? state.startupQ : Math.max(150, Math.round((meta.defaultPhCabeceraM3h || 650) * 0.4 / 10) * 10);
+      state.flowTarget = null;
+      if (state.tripCause) state.tripCause = {};
       if (state.pig.stuck) {
         state.pig.stuck = false;
         state.pig.lowSpeedSec = 0;

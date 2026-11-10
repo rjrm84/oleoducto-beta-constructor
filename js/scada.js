@@ -324,7 +324,7 @@
         for (const p of pumps) {
           const run = p.online && !failed;
           const isPend = pending && pending.kind === 'pump' && pending.sub === p.id;
-          h += `<tr><td><span class="hmi-pstate ${run ? 'run' : failed ? 'fail' : 'stop'}"></span>${esc(p.name)}${p.reserve ? ' <em>reserva</em>' : ''}</td>
+          h += `<tr><td><span class="hmi-pstate ${run ? 'run' : failed ? 'fail' : 'stop'}"></span>${esc(p.name)}${!run && !failed ? ' <em>disponible</em>' : ''}</td>
             <td>${p.role && p.role.indexOf('booster') >= 0 ? 'Booster' : (p.boostKgCm2 || 0) + ' kg/cm²'}</td>
             <td class="r">${isPend
               ? `<button type="button" class="hmi-btn exec" data-exec="1">Ejecutar: ${pending.label}</button> <button type="button" class="hmi-btn" data-cancel="1">Cancelar</button>`

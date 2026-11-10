@@ -88,10 +88,12 @@
     const RAMP = META.rampFlowM3hPerMin || 15;
     const dispQ = () => (S().dispatchQ != null ? S().dispatchQ : QDEF);
     // arranque después de una parada: se baja el caudal a un valor de arranque y se sube en rampa hasta el despacho
+    const startQ = () => (S().startupQ != null ? S().startupQ : Math.max(150, Math.round(dispQ() * 0.4 / 10) * 10));
     function startRamp(why) {
       const s = S(), disp = dispQ();
-      const q0 = Math.max(150, Math.min(disp, (s.lineFlow || 0) > 50 ? s.lineFlow : disp * 0.4));
+      const q0 = Math.max(100, Math.min(disp, (s.lineFlow || 0) > 50 ? Math.min(s.lineFlow, s.globalFlowSetpoint) : startQ()));
       if (s.globalFlowSetpoint > q0) s.globalFlowSetpoint = q0;
+      if (s.autoRamp === false) { s.flowTarget = null; evLog(`Arranque por ${why}: caudal de arranque ${fmt(q0, 0)} m³/h (rampa al despacho en manual)`); return; }
       if (s.flowTarget === disp && s._rampWhy) return;
       s._rampWhy = why;
       sim.rampFlowTo(disp);
@@ -104,10 +106,92 @@
       }
       sim.clearStationFail(id);
       const st = sim.stationById(id);
-      if (st && st.pumps) for (const p of st.pumps) if (p.reserve) p.online = false;
+      // el reinicio deja la estación lista pero con todas las bombas paradas: el operador elige cuáles arrancar
+      if (st && st.pumps) for (const p of st.pumps) p.online = false;
       delete ev.elec[id]; delete ev.esd[id];
-      if (!Object.keys(S().failedStations).length && !S().phFailed) startRamp(`rearme de ${st.shortName}`);
-      evLog(`Rearme de ${st.shortName}: bombas en marcha`);
+      if (S().tripCause) delete S().tripCause[id];
+      evLog(`${st.shortName} reiniciada: permisivos verificados, bombas paradas y disponibles para arrancar`);
+      return true;
+    }
+    // arranque de bombas elegidas por el operador (secuencia: permisivos, arranque, apertura de descarga)
+    const arrSel = {};
+    function startSelected(id) {
+      const st = sim.stationById(id), sel = arrSel[id] || {};
+      if (S().failedStations[id] || (id === 'ph' && S().phFailed)) { app.toast(`${st.shortName} está disparada: reiniciala primero`); return; }
+      const ids = Object.keys(sel).filter((k) => sel[k]);
+      if (!ids.length) { app.toast('Marcá las bombas que querés arrancar'); return; }
+      let n = 0;
+      for (const pid of ids) {
+        const p = st.pumps.find((q) => q.id === pid);
+        if (!p || p.online) continue;
+        const booster = (p.role || '').includes('booster');
+        const bad = equip && !booster ? equip.pumpPermissives(id, pid).filter((x) => !x[1]) : [];
+        if (bad.length) { evLog(`${st.shortName}: ${p.name} no arranca, falta ${bad.map((x) => x[0].toLowerCase()).join(', ')}`); app.toast(`${p.name}: falta ${bad[0][0].toLowerCase()}`); continue; }
+        sim.setPump(id, pid, true); n++;
+        evLog(`${st.shortName}: secuencia de arranque de ${p.name} (arranque y apertura de la descarga)`);
+      }
+      arrSel[id] = {};
+      if (n) app.toast(`${st.shortName}: ${n} bomba(s) en secuencia de arranque`);
+    }
+    // estrategia global: sin cabecera no tiene sentido seguir bombeando aguas abajo
+    let gsT = 0, gsDone = false;
+    function globalStrategy(dtH) {
+      const s = S(), head = sim.stationById('ph');
+      if (!head) return;
+      const headRun = !s.failedStations.ph && !s.phFailed && (head.pumps || []).some((p) => p.online && !(p.role || '').includes('booster'));
+      if (headRun) { gsT = 0; gsDone = false; return; }
+      if (globalStrategy.cd !== !!s.cdTempHead) { globalStrategy.cd = !!s.cdTempHead; gsDone = false; gsT = 0; }
+      gsT += dtH;
+      if (gsT < 5 / 60 || gsDone) return;
+      // con cabecera temporal (tanque intermedio) solo se detienen las estaciones aguas arriba de ella
+      const cdS = s.cdTempHead ? sim.stationById('cd') : null;
+      const running = ST.filter((id) => id !== 'ph' && !s.failedStations[id] && (sim.stationById(id).pumps || []).some((p) => p.online) && (!cdS || (sim.stationById(id).pkKm || 0) < (cdS.pkKm || 0)));
+      if (!running.length) { gsDone = true; return; } // se reevalúa si cambia la cabecera temporal
+      s.tripCause = s.tripCause || {};
+      for (const id of running) { sim.failStation(id); s.tripCause[id] = 'Parada por estrategia global: cabecera fuera de servicio'; }
+      if (!cdS) sim.state.globalFlowSetpoint = 0;
+      evLog(`ESTRATEGIA GLOBAL: cabecera parada más de 5 min, se detienen ${running.map((id) => sim.stationById(id).shortName).join(', ')}${cdS ? ' (aguas arriba de la cabecera temporal ' + cdS.shortName + ')' : ''}`);
+      gsDone = !cdS;
+    }
+    function resetAll() {
+      let ok = 0, ko = [];
+      for (const id of ST) {
+        const st = sim.stationById(id);
+        if (!(st.pumps || []).length) continue;
+        if (!(S().failedStations[id] || ev.elec[id] || (id === 'ph' && S().phFailed))) continue;
+        const e = ev.elec[id];
+        if (e && !e.ready) { ko.push(st.shortName); continue; }
+        if (rearm(id) === false) ko.push(st.shortName); else ok++;
+      }
+      app.toast(`Reinicio: ${ok} estación(es) listas${ko.length ? ' · sin reiniciar: ' + ko.join(', ') : ''}`);
+    }
+    function arranqueView() {
+      const s = S();
+      const head = sim.stationById('ph');
+      const headRun = head && !s.failedStations.ph && !s.phFailed && (head.pumps || []).some((p) => p.online && !(p.role || '').includes('booster'));
+      let h = `<div class="ar-top"><div><h3 class="sc-h3">Reinicio y arranque de línea <span>orden recomendado: cabecera primero y después cada estación aguas abajo cuando le llega presión de aspiración</span></h3>
+        <div class="ar-line"><span>Cabecera <b class="${headRun ? 'ok' : 'bad'}">${headRun ? 'en servicio' : 'parada'}</b></span><span>Caudal de línea <b>${fmt(s.lineFlow, 0)} m³/h</b></span><span>SP <b>${fmt(s.globalFlowSetpoint, 0)} m³/h</b></span><span>Despacho <b>${fmt(dispQ(), 0)} m³/h</b></span>${s.flowTarget != null ? `<span>Rampa <b>faltan ${fmt(Math.abs(s.flowTarget - s.globalFlowSetpoint) / RAMP, 0)} min</b></span>` : ''}</div>
+        <div class="ar-ctl"><label>Caudal de arranque <input type="number" id="ar-q0" step="10" value="${fmt(startQ(), 0)}"> m³/h</label><button type="button" class="sc-btn" data-ar="q0">Aplicar caudal de arranque</button><label>Despacho <input type="number" id="ar-qd" step="10" value="${fmt(dispQ(), 0)}"> m³/h</label><button type="button" class="sc-btn exec" data-ar="ramp">Subir en rampa al despacho</button><label class="ar-chk"><input type="checkbox" id="ar-auto" ${s.autoRamp === false ? '' : 'checked'}> rampa automática al arrancar</label></div>
+        <div class="me-btns"><button type="button" class="sc-btn" data-ar="closeall">Cerrar todas las descargas de la línea</button><button type="button" class="sc-btn exec" data-ar="resetall">Reiniciar todas las estaciones disparadas</button></div></div></div>`;
+      h += '<div class="ar-list">';
+      for (const id of ST) {
+        const st = sim.stationById(id);
+        const pumps = st.pumps || [];
+        if (!pumps.length) continue;
+        const failed = !!s.failedStations[id] || (id === 'ph' && s.phFailed);
+        const e = ev.elec[id];
+        const cause = failed ? (e ? e.cause : (s.tripCause || {})[id] || 'Disparada') : '';
+        const perm = equip ? equip.stationPermissives(id) : [];
+        const okP = perm.every((x) => x[1]);
+        const on = pumps.filter((p) => p.online && !failed);
+        const sel = arrSel[id] || {};
+        const pAsp = s.pressuresIn[id], spA = st.pAspSpKgCm2;
+        h += `<div class="ar-st ${failed ? 'trip' : on.length ? 'run' : 'idle'}"><div class="ar-h"><b>${esc(st.shortName)}</b><span>${esc(NAME[id])}</span><em>${failed ? 'DISPARADA · ' + esc(cause) : on.length ? on.length + ' bomba(s) en marcha' : 'lista, sin bombas en marcha'}</em><span class="mono">asp ${fmt(pAsp)}${spA != null ? ' / SP ' + fmt(spA) : ''} · desc ${fmt(s.pressuresOut[id])} kg/cm²</span></div>`;
+        if (failed) h += `<div class="eq-perm">${perm.map(([t, ok]) => `<span class="${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'} ${esc(t)}</span>`).join('')}${e && !e.ready ? '<span class="bad">✗ Esperando normalización de la causa</span>' : ''}</div>`;
+        h += `<div class="ar-pumps">${pumps.map((p) => { const b = (p.role || '').includes('booster'); const run = p.online && !failed; return `<label class="ar-p ${run ? 'run' : ''}"><input type="checkbox" data-arsel="${id}:${p.id}" ${sel[p.id] ? 'checked' : ''} ${run || failed ? 'disabled' : ''}> ${esc(p.name.replace(' (booster)', ''))}${b ? ' <i>booster</i>' : ''} <em>${run ? 'en marcha' : 'disponible'}</em></label>`; }).join('')}</div>`;
+        h += `<div class="me-btns"><button type="button" class="sc-btn" data-closeall="${id}">Cerrar descargas</button>${failed ? `<button type="button" class="sc-btn exec" data-rearm="${id}" ${okP && !(e && !e.ready) ? '' : 'disabled'}>Reiniciar estación</button>` : `<button type="button" class="sc-btn exec" data-arstart="${id}">Arrancar seleccionadas</button>${on.length ? `<button type="button" class="sc-btn" data-arstop="${id}">Parar estación</button>` : ''}`}<button type="button" class="sc-btn" data-st="${id}" data-arpid="1">Ver P&ID</button></div></div>`;
+      }
+      return h + '</div><p class="me-note">Reiniciar una estación verifica los permisivos y la deja con todas las bombas paradas. Cualquier bomba puede ser la de servicio: la que queda parada es la de reserva. Al arrancar, la bomba sale con la descarga cerrada y la secuencia abre la MOV. Si la cabecera queda parada más de 5 minutos, la estrategia global detiene el resto de las estaciones.</p>';
     }
     const EVENTS = CUST ? customEvents() : [
       { g: 'Eléctricas', k: 'pert-sur', t: 'Perturbación eléctrica · zona sur', d: 'Hueco de tensión en la red: disparan los variadores de PH y AC. Requiere rearme cuando la tensión se normaliza.', run: () => { ['ph', 'ac'].forEach((i) => tripStation(i, 'Perturbación eléctrica')); evLog('Perturbación eléctrica zona sur · PH y AC fuera de servicio'); } },
@@ -227,7 +311,7 @@
 
     // ---------------- sub-vistas ----------------
     function nav() {
-      const items = [['principal', 'Principal'], ['estacion', 'Estación (P&ID)'], ['control', 'Control PID'], ['equipos', 'Equipos'], ['integridad', 'Integridad'], ['terminal', 'Terminal ' + TN], ['medicion', 'Medición'], ['cierres', 'Cierres OMNI'], ['custody', 'Custody'], ['alarmlog', 'Hist. alarmas'], ['eventos', 'Eventos y fallas']].concat(CUST ? [] : [['clasica', 'Consola clásica']]).filter(([k]) => (k !== 'equipos' || equip) && (k !== 'control' || pidfp));
+      const items = [['principal', 'Principal'], ['estacion', 'Estación (P&ID)'], ['control', 'Control PID'], ['arranque', 'Reinicio y arranque'], ['equipos', 'Equipos'], ['integridad', 'Integridad'], ['terminal', 'Terminal ' + TN], ['medicion', 'Medición'], ['cierres', 'Cierres OMNI'], ['custody', 'Custody'], ['alarmlog', 'Hist. alarmas'], ['eventos', 'Eventos y fallas']].concat(CUST ? [] : [['clasica', 'Consola clásica']]).filter(([k]) => (k !== 'equipos' || equip) && (k !== 'control' || pidfp));
       $('ing-nav').innerHTML = items.map(([k, t]) => `<button type="button" class="${k === sub ? 'on' : ''}" data-sub="${k}">${t}</button>`).join('');
     }
     function setSub(k) {
@@ -358,7 +442,7 @@
           g += `<line x1="${px - 60}" y1="${y}" x2="${px + 90}" y2="${y}" class="pid-pipe thin"/>`;
           const sp2 = equip ? equip.sucPos(id, p.id) : null;
           g += sp2 == null ? valve(px - 32, y, p.online || !p.reserve, 'MOV') : movG(px - 32, y, sp2, `data-suc="${p.id}"`, 'Asp', 'short');
-          g += `<g class="pid-pump ${ps.cls}" data-pump="${p.id}" transform="translate(${px + 15} ${y})"><circle r="22"/><path d="M-8 -12 L14 0 L-8 12 Z" class="pid-imp"/><text y="-30" text-anchor="middle" class="pid-tag">${esc(p.name)}${p.reserve ? ' · reserva' : ''}</text><text y="40" text-anchor="middle" class="pid-val">${ps.mode} · ${ps.rpm} rpm${equip && equip.pumpCaseP(id, p.id) != null && ps.cls === 'run' ? ' · ' + fmt(equip.pumpCaseP(id, p.id), 1) + ' kg' : ''}</text></g>`;
+          g += `<g class="pid-pump ${ps.cls}" data-pump="${p.id}" transform="translate(${px + 15} ${y})"><circle r="22"/><path d="M-8 -12 L14 0 L-8 12 Z" class="pid-imp"/><text y="-30" text-anchor="middle" class="pid-tag">${esc(p.name)}${!p.online && !v.failed ? ' · disponible' : ''}</text><text y="40" text-anchor="middle" class="pid-val">${ps.mode} · ${ps.rpm} rpm${equip && equip.pumpCaseP(id, p.id) != null && ps.cls === 'run' ? ' · ' + fmt(equip.pumpCaseP(id, p.id), 1) + ' kg' : ''}</text></g>`;
           const mp = equip ? equip.movPos(id, p.id) : null;
           if (mp == null) g += valve(px + 62, y, true, '');
           else g += `<g class="pid-v pid-mov ${mp > 0.95 ? 'open' : mp < 0.05 ? 'closed' : 'moving'}" data-mov="${p.id}" transform="translate(${px + 62} ${y})" style="cursor:pointer"><path d="M-10 -8 L10 8 L10 -8 L-10 8 Z"/><rect x="-7" y="-26" width="14" height="10" rx="2"/><path d="M0 -16 V-6"/><text y="24" text-anchor="middle">Desc${mp > 0.95 || mp < 0.05 ? '' : ' ' + Math.round(mp * 100) + ' %'}</text></g>`;
@@ -501,7 +585,7 @@
           const e = ev.elec[id] || { cause: (S().tripCause || {})[id] || 'Falla', ready: true };
           const perm = equip ? equip.stationPermissives(id) : [];
           const okAll = perm.every((x) => x[1]);
-          return `<div class="ev-rc"><b>${sim.stationById(id).shortName}</b><span>${esc(e.cause)}</span><em>${e.ready ? (okAll ? 'Listo para rearme' : 'Faltan permisivos') : 'Esperando normalización…'}</em>${perm.length ? `<div class="eq-perm">${perm.map(([t, ok]) => `<span class="${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'} ${esc(t)}</span>`).join('')}</div><div class="me-btns"><button type="button" class="sc-btn" data-closeall="${id}">Cerrar todas las descargas</button>${ev.esd[id] ? `<button type="button" class="sc-btn" data-esdreset="${id}">Reponer paro de emergencia</button>` : ''}</div>` : ''}<button type="button" class="sc-btn exec" data-rearm="${id}" ${e.ready && okAll ? '' : 'disabled'}>Rearmar</button></div>`;
+          return `<div class="ev-rc"><b>${sim.stationById(id).shortName}</b><span>${esc(e.cause)}</span><em>${e.ready ? (okAll ? 'Listo para reiniciar' : 'Faltan permisivos') : 'Esperando normalización…'}</em>${perm.length ? `<div class="eq-perm">${perm.map(([t, ok]) => `<span class="${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'} ${esc(t)}</span>`).join('')}</div><div class="me-btns"><button type="button" class="sc-btn" data-closeall="${id}">Cerrar todas las descargas</button>${ev.esd[id] ? `<button type="button" class="sc-btn" data-esdreset="${id}">Reponer paro de emergencia</button>` : ''}</div>` : ''}<button type="button" class="sc-btn exec" data-rearm="${id}" ${e.ready && okAll ? '' : 'disabled'}>Reiniciar estación</button></div>`;
         }).join('') + '</div>';
       }
       const extra = [];
@@ -534,7 +618,7 @@
     function render(force) {
       if (sub === 'clasica') return;
       if (!force && (root.contains(document.activeElement) && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT'))) return;
-      const html = sub === 'control' && pidfp ? controlView() : sub === 'equipos' && equip ? equip.render() : ext && ext.render[sub] ? ext.render[sub]() : sub === 'principal' ? principal() : sub === 'estacion' ? pid() : sub === 'medicion' ? medicion() : eventos();
+      const html = sub === 'arranque' ? arranqueView() : sub === 'control' && pidfp ? controlView() : sub === 'equipos' && equip ? equip.render() : ext && ext.render[sub] ? ext.render[sub]() : sub === 'principal' ? principal() : sub === 'estacion' ? pid() : sub === 'medicion' ? medicion() : eventos();
       if (sub === 'medicion' && !force && proving) {
         // no pisar el panel del prover mientras corre
         const keep = $('me-prover');
@@ -581,6 +665,18 @@
       if (ext) { const tx = e.target.closest(ext.selector); if (tx && ext.click(tx)) { render(true); return; } }
       if (pidfp && sub === 'control') { const tp = e.target.closest(pidfp.selector); if (tp && pidfp.click(tp, stSel)) { render(true); return; } }
       if (faults && sub === 'eventos') { const tf = e.target.closest(faults.selector); if (tf && faults.click(tf)) { render(true); return; } }
+      const ar = e.target.closest('[data-ar],[data-arstart],[data-arstop],[data-arpid]');
+      if (ar) {
+        const da = ar.dataset, s = S();
+        if (da.arpid) { stSel = da.st; setSub('estacion'); return; }
+        if (da.arstart) startSelected(da.arstart);
+        if (da.arstop) { const st = sim.stationById(da.arstop); st.pumps.filter((q) => q.online).forEach((q) => sim.setPump(da.arstop, q.id, false)); evLog(`${st.shortName}: parada de estación por el operador`); }
+        if (da.ar === 'q0') { const q = Number($('ar-q0').value); if (isFinite(q)) { s.startupQ = Math.max(0, Math.min(QMAX, q)); s.globalFlowSetpoint = s.startupQ; s.flowTarget = null; evLog(`Caudal de arranque ${fmt(s.startupQ, 0)} m³/h`); } }
+        if (da.ar === 'ramp') { const q = Number($('ar-qd').value); if (isFinite(q)) { s.dispatchQ = Math.max(0, Math.min(QMAX, q)); sim.rampFlowTo(s.dispatchQ); evLog(`Subida en rampa al despacho ${fmt(s.dispatchQ, 0)} m³/h a ${RAMP} m³/h por minuto`); } }
+        if (da.ar === 'closeall' && equip) { ST.forEach((id) => equip.closeAllMovs(id)); app.toast('Cerrando todas las descargas (1 min)'); }
+        if (da.ar === 'resetall') resetAll();
+        render(true); return;
+      }
       const g2 = e.target.closest('[data-goeq],[data-gofp],[data-closeall],[data-esdreset]');
       if (g2) {
         const d2 = g2.dataset;
@@ -651,6 +747,8 @@
     });
     root.addEventListener('change', (e) => {
       if (ext && ext.change(e.target)) { render(true); return; }
+      if (e.target.dataset && e.target.dataset.arsel) { const [sid, pid] = e.target.dataset.arsel.split(':'); (arrSel[sid] = arrSel[sid] || {})[pid] = e.target.checked; e.target.blur(); render(true); return; }
+      if (e.target.id === 'ar-auto') { S().autoRamp = e.target.checked; e.target.blur(); render(true); return; }
       if (pidfp && sub === 'control' && pidfp.change(e.target, stSel)) { if (e.target.blur) e.target.blur(); render(true); return; }
       if (faults && faults.change(e.target)) { if (e.target.tagName === 'SELECT') e.target.blur(); render(true); return; }
       const c = e.target.closest('[data-pb]');
@@ -681,6 +779,7 @@
       if (equip) equip.update();
       if (faults) faults.tick(dt);
       if (pidfp) pidfp.update();
+      if (dtH > 0) globalStrategy(dtH);
       eventTick();
       provingStep();
       if (ext) ext.update();
