@@ -720,3 +720,52 @@ body[data-ing-sub="clasica"] .ing-body { display: none; }
 .fl-act-h span { font-size: 11.5px; color: var(--sc-ink2); }
 .ev-quick { margin-top: 12px; }
 .ev-quick summary { cursor: pointer; font: 700 13px var(--f-display); text-transform: uppercase; color: var(--sc-nav); }
+.pid-psv path:last-of-type { fill: #9aa3c7; stroke: #0b1d33; stroke-width: 1.2; }
+.pid-psv.open path:last-of-type { fill: #e0201b; }
+.pid-psv.open .pid-val { fill: #ffd2d2; }
+/* faceplate de control de estación */
+.fp-wrap { background: #c9ccd6; border: 1px solid #8a8fa3; padding: 10px; color: #111; }
+.fp-title { font: 700 15px var(--f-display); text-transform: uppercase; margin-bottom: 8px; }
+.fp-title span { font: 400 12px var(--f-body, inherit); text-transform: none; color: #444; margin-left: 8px; }
+.fp-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+.fp-loop { background: #dfe1e8; border: 1px solid #9a9fb2; padding: 6px; width: 190px; display: flex; flex-direction: column; gap: 4px; }
+.fp-loop.sel { box-shadow: inset 0 0 0 2px #1d3b8a; }
+.fp-h { font: 700 12.5px var(--f-display); text-transform: uppercase; text-align: center; }
+.fp-h em { font-style: normal; background: #1d3b8a; color: #fff; padding: 0 4px; border-radius: 2px; font-size: 10.5px; margin-left: 4px; }
+.fp-u, .fp-ro { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; text-align: center; font-size: 11px; }
+.fp-ro b, .fp-spin { background: #0c0f14; color: #4cff7a; font: 600 12px var(--f-mono); padding: 2px; border: 1px solid #333; text-align: center; width: 100%; box-sizing: border-box; }
+.fp-spin { color: #ffe066; }
+.fp-bars { display: flex; justify-content: space-around; align-items: stretch; height: 150px; background: #0c0f14; padding: 6px 4px; }
+.fp-stepcol { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.fp-stepcol button { font-size: 10px; line-height: 1; padding: 1px 4px; background: #e9ebf2; border: 1px solid #777; cursor: pointer; }
+.fp-bar { width: 16px; flex: 1; background: repeating-linear-gradient(#1c222c 0 3px, #0c0f14 3px 5px); position: relative; }
+.fp-bar i { position: absolute; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(currentColor 0 3px, transparent 3px 5px); }
+.fp-bar.sp { color: #e2c43a; } .fp-bar.pv { color: #e34242; } .fp-bar.cv { color: #48d65b; }
+.fp-ramp { display: grid; gap: 3px; font-size: 11px; border: 1px solid #9a9fb2; padding: 4px; }
+.fp-ramp input { width: 64px; font: 12px var(--f-mono); }
+.fp-ramp div { display: flex; gap: 4px; }
+.fp-run { font: 11px var(--f-mono); color: #1d3b8a; }
+.fp-mode { text-align: center; font: 700 13px var(--f-mono); background: #0c0f14; color: #4cff7a; padding: 2px; }
+.fp-mode.man { color: #ffcc33; }
+.fp-pv { display: grid; gap: 2px; font-size: 11px; }
+.fp-modo { display: grid; gap: 2px; text-align: center; font-size: 11px; }
+.fp-modo button { font: 700 13px var(--f-display); background: #ffe14d; border: 2px solid #b8222a; padding: 4px; cursor: pointer; }
+.fp-modo.loc button { background: #ff9d3c; }
+.fp-vfd { width: 150px; }
+.fp-lr { background: #111; color: #fff; text-align: center; font: 700 12px var(--f-display); padding: 3px; }
+.fp-lr.loc { background: #b8222a; }
+.fp-mini { font-size: 10.5px; border: 1px solid #777; background: #e9ebf2; cursor: pointer; }
+.fp-rpm { display: grid; font-size: 11px; text-align: center; }
+.fp-rpm b { font: 600 12px var(--f-mono); background: #fff; border: 1px solid #777; }
+.fp-lamps { display: grid; gap: 2px; font-size: 12px; }
+.fp-lamp::after { content: ''; display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #6b7080; margin-left: 6px; vertical-align: middle; }
+.fp-lamp.on::after { background: #e0201b; box-shadow: 0 0 4px #e0201b; }
+.fp-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.fp-tog { border: 1px solid #777; background: #e9ebf2; padding: 4px 8px; cursor: pointer; font-size: 12px; }
+.fp-tog.on { background: #e0201b; color: #fff; }
+.fp-help { font-size: 11.5px; color: #333; flex-basis: 100%; }
+.fp-tune { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; font-size: 12px; }
+.fp-tune input { width: 56px; }
+.fp-ramp input, .fp-tune input { background: #fff; color: #111; border: 1px solid #777; color-scheme: light; }
+.fp-mini, .fp-tog, .fp-stepcol button { color: #111; }
+.fp-tog.on { color: #fff; }
