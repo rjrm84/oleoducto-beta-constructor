@@ -163,3 +163,52 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .b-search input { width: 150px; }
 }
 @media (max-width: 820px) { .b-top { position: static; } }
+/* v17 planes y licencias */
+.lic-chip { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0; padding: 4px 10px; border-radius: 8px; border: 1px solid var(--accent, #e8b04a); background: transparent; color: var(--fg, #ecebe5); cursor: pointer; font: 500 11px var(--f-mono, monospace); line-height: 1.25; }
+.lic-chip b { font: 700 13px var(--f-display, sans-serif); letter-spacing: .05em; text-transform: uppercase; color: var(--accent, #e8b04a); }
+.lic-chip span { color: var(--mute, #8f9ca2); }
+.lic-chip[data-plan="gratis"] { background: var(--accent, #e8b04a); }
+.lic-chip[data-plan="gratis"] b, .lic-chip[data-plan="gratis"] span { color: #0d1114; }
+.lic-modal { position: fixed; inset: 0; z-index: 200; background: rgba(5, 8, 10, .78); overflow-y: auto; padding: 24px 16px; }
+.lic-modal[hidden] { display: none; }
+.lic-card { position: relative; max-width: 1060px; margin: 0 auto; background: #141a1e; color: #ecebe5; border: 1px solid #2a363d; border-radius: 14px; padding: 24px; font: 15px/1.45 var(--f-body, system-ui, sans-serif); }
+.lic-card h2 { font: 700 34px/1 var(--f-display, sans-serif); text-transform: uppercase; margin: 0 0 4px; }
+.lic-sub { color: #8f9ca2; margin: 0 0 14px; }
+.lic-x { position: absolute; top: 12px; right: 12px; background: none; border: 1px solid #2a363d; color: #ecebe5; border-radius: 8px; width: 34px; height: 34px; cursor: pointer; font-size: 16px; }
+.lic-cur { background: #10251a; border: 1px solid #2f6b45; border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; font-size: 14px; }
+.lic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.lic-col { border: 1px solid #2a363d; border-radius: 12px; padding: 16px; background: #1b2328; display: flex; flex-direction: column; gap: 8px; }
+.lic-col.hot { border-color: #e8b04a; }
+.lic-col.cur { box-shadow: inset 0 0 0 2px #57d68d; }
+.lic-col ul { margin: 0; padding-left: 18px; font-size: 14px; display: grid; gap: 4px; }
+.lic-pn { font: 700 22px var(--f-display, sans-serif); text-transform: uppercase; margin: 0; }
+.lic-pp { font: 600 20px var(--f-mono, monospace); color: #e8b04a; }
+.lic-badge { align-self: flex-start; margin: 0; font: 600 11px var(--f-mono, monospace); text-transform: uppercase; background: #e8b04a; color: #0d1114; padding: 2px 8px; border-radius: 999px; }
+.lic-tag { margin: auto 0 0; color: #57d68d; font-weight: 600; }
+.lic-m { color: #8f9ca2; font-size: 13px; margin: 0; }
+.lic-m a, .lic-cmp a { color: #8fc1e3; }
+.lic-plist { display: grid; gap: 6px; }
+.lic-pl { display: grid; grid-template-columns: 1fr auto; gap: 0 8px; align-items: baseline; border: 1px solid #2a363d; border-radius: 8px; padding: 6px 10px; background: #141a1e; }
+.lic-pl .lic-pp { font-size: 16px; }
+.lic-pl small { grid-column: 1 / -1; color: #8f9ca2; font-size: 12px; }
+.lic-pl.best { border-color: #57d68d; }
+.lic-pay { grid-column: 1 / -1; justify-self: start; color: #8fc1e3; font-size: 13px; }
+.lic-btn { margin-top: auto; }
+.lic-cmp { margin: 16px 0 10px; }
+.lic-cmp summary, .lic-act summary { cursor: pointer; color: #8fc1e3; font-weight: 600; }
+.lic-cmp table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+.lic-cmp th, .lic-cmp td { border-bottom: 1px solid #2a363d; padding: 6px 8px; text-align: center; }
+.lic-cmp td:first-child, .lic-cmp th:first-child { text-align: left; }
+.lic-act { margin-top: 12px; }
+.lic-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.lic-row textarea { flex: 1 1 300px; min-height: 52px; background: #0d1114; color: #ecebe5; border: 1px solid #2a363d; border-radius: 8px; padding: 8px; font: 12px var(--f-mono, monospace); }
+.lic-msg { min-height: 1em; font-size: 13px; }
+.lic-msg.bad { color: #e5484d; }
+.lic-lock { max-width: 620px; margin: 40px auto; text-align: center; background: #1b2328; color: #ecebe5; border: 1px solid #2a363d; border-radius: 12px; padding: 26px 22px; font: 15px/1.45 var(--f-body, system-ui, sans-serif); }
+.lic-lock h3 { font: 700 22px var(--f-display, sans-serif); text-transform: uppercase; margin: 6px 0; }
+.lic-lock p { color: #8f9ca2; }
+.lic-lock-i { font-size: 30px; }
+.lic-lk { font-style: normal; font-size: 10px; }
+.lic-gate { position: fixed; inset: 0; z-index: 150; background: rgba(5, 8, 10, .9); overflow-y: auto; padding: 40px 16px; }
+.lic-gate .lic-card { max-width: 680px; text-align: center; }
+.lic-gate .lic-lock { border: 0; margin: 0 auto; background: none; }
