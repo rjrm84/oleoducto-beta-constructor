@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Constructor de ductos · Oleoducto Beta</title>
+<meta name="description" content="Armá un oleoducto a medida sobre el mapa real: trazado, altimetría, caño, estaciones, bombas, válvulas, medición y destino. Después simulalo con vista 3D y SCADA.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="css/builder.css?v=9">
+</head>
+<body>
+<div class="b-shell">
+  <header class="b-top">
+    <div class="b-brand">
+      <span class="b-brand-name">Constructor de ductos</span>
+      <span class="b-brand-sub">Oleoducto Beta · ductos a medida</span>
+    </div>
+    <nav class="b-topnav" aria-label="Navegación">
+      <a href="#" id="nav-lib" class="b-tlink">Mis ductos</a>
+      <a href="https://rjrm84.github.io/oleoducto-beta/" class="b-tlink">Simulador Beta</a>
+    </nav>
+    <div class="b-top-actions" id="ed-actions" hidden>
+      <span class="b-saved" id="ed-saved">Sin cambios</span>
+      <button type="button" class="b-btn" id="ed-export">Exportar .json</button>
+      <button type="button" class="b-btn" id="ed-save">Guardar</button>
+      <button type="button" class="b-btn b-btn-hot" id="ed-sim">Guardar y simular</button>
+    </div>
+  </header>
+
+  <!-- Biblioteca -->
+  <main class="b-lib" id="lib">
+    <section class="b-lib-hero">
+      <h1>Armá un oleoducto desde cero y simulalo</h1>
+      <p>Dibujá el trazado sobre el mapa, bajá la altimetría real, elegí el caño, y dejá que el constructor proponga estaciones, bombas, válvulas, medición y trampas de pig. Después lo operás con la vista 3D, la sala de control, el SCADA, integridad y custody.</p>
+      <div class="b-lib-btns">
+        <button type="button" class="b-btn b-btn-hot" id="lib-new">Nuevo ducto</button>
+        <button type="button" class="b-btn" id="lib-example">Cargar ejemplo (Añelo → puerto)</button>
+        <label class="b-btn b-file">Importar .json<input type="file" id="lib-import" accept=".json,application/json"></label>
+      </div>
+    </section>
+    <section>
+      <h2 class="b-h2">Mis ductos <span>guardados en este navegador</span></h2>
+      <div class="b-cards" id="lib-cards"></div>
+    </section>
+  </main>
+
+  <!-- Editor -->
+  <main class="b-ed" id="ed" hidden>
+    <nav class="b-steps" id="ed-steps" aria-label="Pasos"></nav>
+    <section class="b-pane" id="ed-pane"></section>
+  </main>
+</div>
+
+<div class="b-toast" id="b-toast" role="status"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>window.OB_LINKS={sim:"simulador.html",builder:"index.html"};</script>
+<script src="js/pipeline-gen.js?v=9"></script>
+<script src="js/sim.js?v=9"></script>
+<script src="js/geo.js?v=9"></script>
+<script src="js/builder.js?v=9"></script>
+</body>
+</html>

@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Oleoducto Beta</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Simulador 3D de un oleoducto de 530 km que cruza los Andes: sala de control SCADA, fallas reales y modo desafío.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/style.css?v=9">
+<link rel="stylesheet" href="css/app.css?v=9">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+
+</head>
+<body>
+<div id="shell" class="x-shell">
+  <header class="x-top">
+    <div class="x-brand">
+      <span class="x-brand-name">Oleoducto Beta</span>
+      <span class="x-brand-sub">PH → LC · 530 km · 16 in</span>
+    </div>
+    <nav class="x-tabs" aria-label="Vistas">
+      <a href="#vista-3d" class="x-tab" data-view="vista-3d">Vista 3D</a>
+      <a href="#scada" class="x-tab" data-view="scada">Sala de control</a>
+      <a href="#desafio" class="x-tab" data-view="desafio">Desafío</a>
+      <a href="#ingenieria" class="x-tab" data-view="ingenieria">SCADA</a>
+      <a href="index.html" class="x-tab x-tab-build" id="x-build">Constructor</a>
+    </nav>
+    <div class="x-clock">
+      <div class="x-kv"><span>Hora sim</span><b id="x-time">--:--</b></div>
+      <div class="x-kv"><span>Recibo LC</span><b id="x-qlc">— m³/h</b></div>
+      <div class="x-kv"><span>P llegada</span><b id="x-plc">— kg/cm²</b></div>
+      <div class="x-light" id="x-light" title="Estado general"><i></i><span id="x-light-t">—</span></div>
+      <div class="x-speed" role="group" aria-label="Velocidad">
+        <button type="button" class="x-sbtn" data-speed="1">1×</button>
+        <button type="button" class="x-sbtn active" data-speed="60">60×</button>
+        <button type="button" class="x-sbtn" data-speed="720">720×</button>
+        <button type="button" class="x-sbtn" id="x-pause" aria-label="Pausar">❚❚</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="x-views">
+    <!-- 3D -->
+    <section id="view-vista-3d" class="x-view" data-view="vista-3d">
+      <div id="v3d-canvas" class="v3d-canvas" aria-label="Vista 3D del oleoducto"></div>
+      <div class="v3d-loading" id="v3d-loading">Generando terreno…</div>
+
+      <div class="v3d-hud v3d-hud-tl">
+        <div class="v3d-card">
+          <div class="v3d-eyebrow">Color del crudo</div>
+          <div class="v3d-seg" role="group" aria-label="Variable de color">
+            <button type="button" class="active" data-color="presion">Presión</button>
+            <button type="button" data-color="maop">% MAOP</button>
+            <button type="button" data-color="caudal">Caudal</button>
+          </div>
+          <div class="v3d-legend" id="v3d-legend"><span>0</span><i></i><span>95 kg/cm²</span></div>
+          <label class="v3d-row"><input type="checkbox" id="v3d-hgl" checked> Línea piezométrica (HGL)</label>
+          <label class="v3d-row"><input type="checkbox" id="v3d-labels" checked> Etiquetas</label>
+          <label class="v3d-row v3d-range">Relieve ×<span id="v3d-exag-v">8</span>
+            <input type="range" id="v3d-exag" min="2" max="20" step="1" value="8">
+          </label>
+        </div>
+      </div>
+
+      <div class="v3d-hud v3d-hud-bl">
+        <div class="v3d-cams" role="group" aria-label="Cámara">
+          <button type="button" data-cam="corredor" class="active">Corredor</button>
+          <button type="button" data-cam="seguir">Seguir el crudo</button>
+          <button type="button" data-cam="estacion">Estación</button>
+          <button type="button" data-cam="cine">Modo cine</button>
+          <button type="button" id="v3d-pig">Lanzar pig y seguirlo</button>
+        </div>
+      </div>
+
+      <aside class="v3d-hud v3d-hud-tr" id="v3d-station" hidden>
+        <div class="v3d-card v3d-stcard">
+          <div class="v3d-st-head">
+            <div><div class="v3d-eyebrow" id="v3d-st-pk">PK —</div><h3 id="v3d-st-name">—</h3></div>
+            <button type="button" class="v3d-x" id="v3d-st-close" aria-label="Cerrar">×</button>
+          </div>
+          <dl class="v3d-dl" id="v3d-st-vals"></dl>
+          <div class="v3d-pumps" id="v3d-st-pumps"></div>
+          <button type="button" class="x-btn" id="v3d-st-scada">Abrir en sala de control</button>
+        </div>
+      </aside>
+
+      <div class="v3d-cine-bar" id="v3d-cine-bar" hidden>
+        <span id="v3d-cine-txt">Oleoducto Beta · PK 0</span>
+        <button type="button" class="x-btn" id="v3d-cine-exit">Salir del modo cine</button>
+      </div>
+    </section>
+
+    <!-- SCADA / HMI -->
+    <section id="view-scada" class="x-view hmi" data-view="scada" hidden>
+      <div class="hmi-grid">
+        <div class="hmi-panel hmi-overview">
+          <div class="hmi-ph">
+            <h2>Vista general · Oleoducto PH–LC</h2>
+            <span class="hmi-hint">Nivel 1 · tocá una estación para ver su detalle</span>
+          </div>
+          <div class="hmi-svgwrap"><svg id="hmi-svg" viewBox="0 0 1400 560" role="img" aria-label="Sinóptico del oleoducto"></svg></div>
+        </div>
+
+        <div class="hmi-panel hmi-face" id="hmi-face"></div>
+
+        <div class="hmi-panel hmi-dispatch">
+          <div class="hmi-ph"><h2>Despacho</h2><span class="hmi-hint">Cabecera PH</span></div>
+          <label class="hmi-field" for="hmi-sp">Setpoint de caudal
+            <span class="hmi-num"><b id="hmi-sp-v">650</b> m³/h</span>
+          </label>
+          <input type="range" id="hmi-sp" min="0" max="750" step="10" value="680">
+          <label class="hmi-check"><input type="checkbox" id="hmi-dra" checked> DRA (reductor de fricción) en todas las EB</label>
+          <div class="hmi-btnrow">
+            <button type="button" class="hmi-btn" id="hmi-pig">Lanzar pig</button>
+            <button type="button" class="hmi-btn" id="hmi-normal">Volver a operación normal</button>
+          </div>
+          <div class="hmi-kpis" id="hmi-kpis"></div>
+        </div>
+
+        <div class="hmi-panel hmi-trend">
+          <div class="hmi-ph"><h2>Tendencias</h2><span class="hmi-hint" id="hmi-trend-hint">Últimas 8 h simuladas</span></div>
+          <canvas id="hmi-trend" height="220"></canvas>
+          <div class="hmi-legend" id="hmi-trend-legend"></div>
+        </div>
+
+        <div class="hmi-panel hmi-alarms">
+          <div class="hmi-ph">
+            <h2>Resumen de alarmas</h2>
+            <button type="button" class="hmi-btn" id="hmi-ack-all">Reconocer todas</button>
+          </div>
+          <div class="hmi-tablewrap">
+            <table class="hmi-table">
+              <thead><tr><th>Hora</th><th>Prio</th><th>Tag</th><th>Descripción</th><th>Estado</th><th></th></tr></thead>
+              <tbody id="hmi-alarm-rows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Desafío -->
+    <section id="view-desafio" class="x-view x-game" data-view="desafio" hidden>
+      <div class="g-wrap">
+        <div class="g-intro">
+          <div class="g-eyebrow">Modo desafío</div>
+          <h1>Tomá el turno de la sala de control</h1>
+          <p>Tenés que llevar crudo de Puesto Hernández a Luján de Cuyo mientras la línea falla. Cada decisión cuesta metros cúbicos. El plan es <b>16.500 m³ por día</b> en el recibo (unos 690 m³/h).</p>
+        </div>
+        <div class="g-modes">
+          <article class="g-mode">
+            <div class="g-tag">Todos juegan el mismo</div>
+            <h2>Misión del día</h2>
+            <p>6 horas simuladas, 2 incidentes. Mismo escenario para todos hoy: compará tu puntaje.</p>
+            <div class="g-meta"><span>≈ 2,5 min</span><span id="g-day-label">—</span></div>
+            <button type="button" class="x-btn x-btn-hot" data-game="mision">Jugar la misión</button>
+          </article>
+          <article class="g-mode">
+            <div class="g-tag">Aleatorio</div>
+            <h2>Turno de 12 horas</h2>
+            <p>12 horas simuladas, 3 incidentes sorpresa entre 6 tipos de falla. Ideal para entrenar.</p>
+            <div class="g-meta"><span>≈ 5 min</span><span>3 incidentes</span></div>
+            <button type="button" class="x-btn" data-game="turno">Tomar el turno</button>
+          </article>
+        </div>
+        <div class="g-how">
+          <h3>Cómo se puntúa</h3>
+          <ul>
+            <li><b>+1 punto</b> por cada m³ que llega a Luján de Cuyo.</li>
+            <li><b>Reconocé la alarma rápido:</b> hasta +300 si lo hacés en los primeros segundos.</li>
+            <li><b>Elegí la respuesta correcta:</b> +500 y la línea se normaliza antes. Una mala decisión resta 400 y alarga la falla.</li>
+            <li><b>Penalidades:</b> −200 por cada disparo por MAOP y crudo derramado ×2 mientras la rotura no esté aislada.</li>
+          </ul>
+          <p class="g-best" id="g-best"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Ingeniería: consola original -->
+    <section id="view-ingenieria" class="x-view x-ing" data-view="ingenieria" hidden>
+      <div class="ing-shell">
+        <div class="ing-top">
+          <nav id="ing-nav" class="ing-nav" aria-label="Pantallas de ingeniería"></nav>
+          <div class="ing-brand">OLEODUCTO BETA · SCADA</div>
+        </div>
+        <div class="ing-body">
+          <div id="ing-main" class="ing-main"></div>
+          <aside id="ing-side" class="ing-side" aria-label="Menú de pantallas">
+            <button type="button" data-go="alarmas">Alarmas</button>
+            <button type="button" data-go="principal">VB / Principal</button>
+            <button type="button" data-go="medicion">Medidores</button>
+            <button type="button" data-go="integridad">Integridad</button>
+            <button type="button" data-go="terminal">Tanques LC</button>
+            <button type="button" data-go="cierres">Cierres OMNI</button>
+            <button type="button" data-go="custody">Custody</button>
+            <button type="button" data-go="alarmlog">Hist. alarmas</button>
+            <button type="button" data-go="eventos">Est. global</button>
+            <button type="button" data-go="eventos">Paros y rearme</button>
+            <button type="button" data-go="st:ph">PH</button>
+            <button type="button" data-go="st:ac">AC</button>
+            <button type="button" data-go="st:cd">CD</button>
+            <button type="button" data-go="st:mg">ML</button>
+            <button type="button" data-go="st:sos">ES</button>
+            <button type="button" data-go="st:rt">RT</button>
+            <button type="button" data-go="st:lc">LC</button>
+          </aside>
+        </div>
+        <div id="ing-classic" class="ing-classic" hidden>
+<div id="app">
+    <div class="banner" id="disclaimer-banner">
+      Simulación de entrenamiento con valores estimados. No es SCADA en vivo ni dato contractual de ninguna operadora.
+    </div>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="id">OLEODUCTO BETA · consola clásica</span>
+        <h1 id="pipeline-title">Puesto Hernández → Luján de Cuyo</h1>
+        <span class="meta-sub" id="meta-length">530 km · plan 16.500 m³/d</span>
+      </div>
+
+      <div class="kpi-row">
+        <div class="kpi"><span class="k">Fecha/hora sim</span><span class="v" id="sim-datetime">—</span></div>
+        <div class="kpi"><span class="k">Tiempo sim</span><span class="v" id="sim-time">00:00:00</span></div>
+        <div class="kpi"><span class="k">Hora del día</span><span class="v" id="sim-hod">—</span></div>
+        <div class="kpi"><span class="k">Velocidad</span><span class="v" id="sim-speed">720x</span></div>
+        <div class="kpi"><span class="k">Caudal línea</span><span class="v" id="line-flow">— m³/h</span></div>
+        <div class="kpi"><span class="k">P mín/máx</span><span class="v" id="line-pminmax">—</span></div>
+        <div class="kpi"><span class="k">Frente crudo</span><span class="v" id="oil-front-kpi">—</span></div>
+        <div class="kpi"><span class="k">Pig</span><span class="v" id="pig-status" style="font-size:11px;color:#fdba74">Pig: inactivo</span></div>
+      </div>
+
+      <div class="controls-inline">
+        <label class="flow-label">
+          Setpoint PH
+          <input type="range" id="flow-setpoint" min="0" max="750" step="10" value="680" />
+          <span id="flow-setpoint-val">650</span> m³/h
+        </label>
+        <button type="button" class="btn" data-speed="1">1x</button>
+        <button type="button" class="btn" data-speed="10">10x</button>
+        <button type="button" class="btn" data-speed="60">60x</button>
+        <button type="button" class="btn active" data-speed="720" title="Demo 24h: 1h sim = 5s real">Demo 24h</button>
+        <button type="button" class="btn" id="btn-pause" title="Space">Pausar</button>
+        <label class="flow-label dra-toggle">
+          <input type="checkbox" id="chk-dra" checked /> DRA
+        </label>
+        <button type="button" class="btn accent" id="btn-launch-pig-global">Lanzar pig</button>
+        <button type="button" class="btn ghost" id="btn-reset-pig">Reset pig</button>
+      </div>
+    </header>
+
+    <div class="hod-bar" title="Progreso hora del día (sim)">
+      <div class="hod-fill" id="hod-fill"></div>
+      <span class="hod-label" id="hod-label">Hora del día</span>
+    </div>
+
+    <section class="scenario-ribbon panel">
+      <h2>Cinta de escenarios</h2>
+      <div class="kill-row">
+        <button type="button" class="btn kill-all" id="btn-apagar-todas" title="Demo gerencia: cascada total">⏻ APAGAR TODAS LAS ESTACIONES</button>
+        <button type="button" class="btn restore-all" id="btn-restablecer-todas">↻ Restablecer todas</button>
+      </div>
+      <div class="scenarios" id="scenario-ribbon">
+        <button type="button" class="btn danger" data-scenario="falla_ph">CAÍDA PH</button>
+        <button type="button" class="btn danger" data-scenario="falla_ac">CAÍDA AC</button>
+        <button type="button" class="btn danger" data-scenario="falla_cd">CAÍDA CD</button>
+        <button type="button" class="btn danger" data-scenario="falla_mg">CAÍDA ML</button>
+        <button type="button" class="btn danger" data-scenario="falla_sos">CAÍDA ES</button>
+        <button type="button" class="btn danger" data-scenario="falla_rt">CAÍDA RT</button>
+        <button type="button" class="btn danger" data-scenario="falla_ug">CAÍDA UG</button>
+        <button type="button" class="btn danger" data-scenario="fuga_rotura_pk" title="Escenario 1">① Fuga/rotura PK</button>
+        <button type="button" class="btn danger" data-scenario="perdida_electrica_eb" title="Escenario 2">② Pérdida eléctrica EB</button>
+        <button type="button" class="btn accent" data-scenario="pig_run">Pig run</button>
+        <button type="button" class="btn danger" data-scenario="pig_stuck_peak" title="Escenario 5">⑤ Pig stuck peak</button>
+        <button type="button" class="btn danger" data-scenario="sobrepresion_surge" title="Escenario 6">⑥ Surge post-parada</button>
+        <button type="button" class="btn" data-scenario="falla_ph_cd_cabecera" title="Escenario 7">⑦ PH↓ + CD cabecera 2h</button>
+        <button type="button" class="btn" data-scenario="eb_down_redistrib">1 EB down + redistrib</button>
+        <button type="button" class="btn" data-scenario="cold_start">Arranque en frío</button>
+        <button type="button" class="btn" data-scenario="cd_inj_limit">CD cabecera / límite iny</button>
+        <button type="button" class="btn danger" data-scenario="pig_stuck">Pig stuck</button>
+        <button type="button" class="btn danger" data-scenario="sobrepresion">Sobrepresión</button>
+        <button type="button" class="btn" data-scenario="clear">Limpiar</button>
+      </div>
+      <div id="cd-autonomy" class="autonomy-banner" hidden></div>
+    </section>
+
+
+    <section class="panel gerencia-pack">
+      <h2>Impacto de la falla</h2>
+      <div class="impact-grid" id="impact-dashboard">
+        <div class="impact-card"><span class="k">m³/h perdidos LC</span><span class="v" id="imp-lost">—</span></div>
+        <div class="impact-card"><span class="k">m³ acumulados</span><span class="v" id="imp-cum">—</span></div>
+        <div class="impact-card"><span class="k">h a normalizar</span><span class="v" id="imp-hours">—</span></div>
+        <div class="impact-card"><span class="k">% plan diario (~690 m³/h)</span><span class="v" id="imp-pct">—</span></div>
+        <div class="impact-card traffic" id="imp-traffic"><span class="k">Semáforo</span><span class="v" id="imp-light">●</span></div>
+        <div class="impact-card money"><span class="k">USD dejados en mesa</span><span class="v" id="imp-usd">—</span></div>
+      </div>
+      <div class="gerencia-controls">
+        <label class="flow-label">Costo oportunidad USD/m³
+          <input type="number" id="usd-per-m3" min="0" step="1" value="45" />
+        </label>
+        <div class="crisis-row">
+          <span class="crisis-label">Modo crisis:</span>
+          <button type="button" class="btn crisis" data-crisis="contener">(a) Contener</button>
+          <button type="button" class="btn crisis" data-crisis="redistribuir">(b) Redistribuir / CD</button>
+          <button type="button" class="btn crisis danger" data-crisis="parar_seguro">(c) Parar seguro</button>
+        </div>
+        <button type="button" class="btn" id="btn-dra-compare">A/B DRA on vs off</button>
+        <button type="button" class="btn" id="btn-criticality">Ranking criticidad EB</button>
+      </div>
+      <div id="crisis-outcome" class="crisis-outcome muted"></div>
+      <div id="dra-compare-table" class="dra-table"></div>
+      <div id="criticality-table" class="crit-table"></div>
+    </section>
+
+    <div class="main">
+      <div class="center-col">
+        <section class="panel">
+          <h2>Esquema · PH→AC→CD→MG→SOS→PA→RT→UG→LC · inyecciones laterales · Espacio = pausa</h2>
+          <canvas id="schematic-canvas" width="1200" height="260" aria-label="Esquema del oleoducto"></canvas>
+        </section>
+
+        <section class="panel">
+          <h2>Altimetría + HGL · peak PK 198 / 1.985 m · presiones kg/cm² · estimación de entrenamiento</h2>
+          <canvas id="altimetry-canvas" width="1200" height="260" aria-label="Perfil altimétrico y HGL"></canvas>
+        </section>
+
+        <div class="mid-grid">
+          <section class="panel">
+            <h2>Estrategia global por fallas (playbook)</h2>
+            <div id="playbook-panel" class="playbook-panel">
+              <p class="muted">Se activa al disparar fallas / pig / calidad.</p>
+            </div>
+          </section>
+          <section class="panel">
+            <h2>Umbrales operativos / no contractual · editables</h2>
+            <div id="thresholds-panel" class="thresholds-panel"></div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <h2>Alarmas activas</h2>
+          <div id="alarms-list"></div>
+        </section>
+
+        <section class="panel logs-panel">
+          <div class="logs-grid">
+            <div>
+              <div class="log-head">
+                <h2>Log de alarmas</h2>
+                <button type="button" class="btn ghost" id="btn-clear-alarm-log">Limpiar</button>
+              </div>
+              <div id="alarm-log" class="log-box" aria-live="polite"></div>
+            </div>
+            <div>
+              <div class="log-head">
+                <h2>Log de eventos</h2>
+                <button type="button" class="btn ghost" id="btn-clear-event-log">Limpiar</button>
+              </div>
+              <div id="event-log" class="log-box" aria-live="polite"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <aside class="side">
+        <h2>Recibo LC · tanques</h2>
+        <div id="lc-receipt" class="lc-receipt"></div>
+        <div id="tanks-sidebar"></div>
+        <div id="linepack-panel" hidden></div>
+        <p class="muted" style="margin-top:14px">Válvulas de bloqueo, linepack y fugas: ahora en <b>SCADA › Integridad</b>.</p><div id="valves-panel" class="valves-panel" hidden></div>
+        <h2 style="margin-top:14px">Detalle / editor estación</h2>
+        <div id="station-detail">
+          <p class="muted">Seleccione una estación en el esquema.</p>
+        </div>
+      </aside>
+    </div>
+
+    <footer class="footer-note">
+      No Confidencial · Entrenamiento · No es SCADA en vivo · Umbrales operativo/no contractual ·
+      Fuente PK/cota: altimetría PH-LC / datos de bombeo (estimados) · Espacio = pausa
+    </footer>
+  </div>
+
+  <div id="pig-sop-modal" class="modal" aria-hidden="true" role="dialog" aria-labelledby="pig-sop-title">
+    <div class="modal-card">
+      <h3 id="pig-sop-title">Checklist SOP — lanzamiento de pig (entrenamiento)</h3>
+      <p class="muted">Pasos simplificados. <strong>No es un procedimiento oficial.</strong></p>
+      <ol class="sop-list">
+        <li><label><input type="checkbox" /> Aislamiento: verificar trampas / válvulas de bypass (simulado)</label></li>
+        <li><label><input type="checkbox" /> Kicker: confirmar presión de kicker / alineación (simulado)</label></li>
+        <li><label><input type="checkbox" /> Launch: autorización sala + listo para lanzar</label></li>
+      </ol>
+      <p id="pig-sop-error" class="sop-error"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" id="pig-sop-cancel">Cancelar</button>
+        <button type="button" class="btn accent" id="pig-sop-confirm">Confirmar y lanzar</button>
+      </div>
+    </div>
+  </div>
+
+  
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- HUD del juego (visible en cualquier vista) -->
+  <div class="g-hud" id="g-hud" hidden>
+    <div class="g-hud-row">
+      <div class="g-hud-kv"><span>Restan</span><b id="g-left">--:--</b></div>
+      <div class="g-hud-kv"><span>m³ en LC</span><b id="g-m3">0</b></div>
+      <div class="g-hud-kv"><span>Puntaje</span><b id="g-score">0</b></div>
+      <button type="button" class="g-quit" id="g-quit">Abandonar</button>
+    </div>
+    <div class="g-incident" id="g-incident" hidden>
+      <div class="g-inc-eyebrow" id="g-inc-eyebrow">Incidente 1 de 3</div>
+      <h3 id="g-inc-title">—</h3>
+      <p id="g-inc-brief">—</p>
+      <div class="g-opts" id="g-opts"></div>
+      <div class="g-inc-foot" id="g-inc-foot"></div>
+    </div>
+  </div>
+
+  <!-- Banner de alarmas ISA-18.2 -->
+  <footer class="x-alarmbar" id="x-alarmbar">
+    <div class="x-ab-counts">
+      <span class="x-ab-chip p1" title="Prioridad 1 sin reconocer"><i></i><b id="x-ab-p1">0</b></span>
+      <span class="x-ab-chip p2" title="Prioridad 2 sin reconocer"><i></i><b id="x-ab-p2">0</b></span>
+    </div>
+    <div class="x-ab-msg" id="x-ab-msg">Sin alarmas activas · operación normal</div>
+    <div class="x-ab-act">
+      <button type="button" class="x-ab-btn" id="x-ab-ack">Reconocer</button>
+      <button type="button" class="x-ab-btn" id="x-ab-snd" aria-pressed="false">Sonido: off</button>
+    </div>
+  </footer>
+
+  <!-- Bienvenida -->
+  <div class="x-intro" id="x-intro" hidden>
+    <div class="x-intro-card">
+      <div class="x-intro-eyebrow">Neuquén → Mendoza · 530 km · cota máxima 1.985 m</div>
+      <h1>530 km de crudo cruzando los Andes.<br>Vos estás a cargo.</h1>
+      <p>Un gemelo digital con física real: Darcy-Weisbach sobre la altimetría del ducto, 9 estaciones, 22 válvulas de bloqueo y 17 tipos de falla.</p>
+      <div class="x-intro-btns">
+        <button type="button" class="x-btn x-btn-hot" data-intro="desafio">Jugar la misión del día</button>
+        <button type="button" class="x-btn" data-intro="vista-3d">Explorar en 3D</button>
+        <button type="button" class="x-btn" data-intro="scada">Entrar a la sala de control</button>
+      </div>
+      <p class="x-intro-note">Simulación de entrenamiento con valores estimados. No es un SCADA en vivo ni representa a ninguna operadora.</p>
+    </div>
+  </div>
+
+  <!-- Resultado -->
+  <div class="x-modal" id="g-result" hidden>
+    <div class="x-modal-card">
+      <img id="g-card" alt="Tarjeta de resultado del turno">
+      <p class="g-res-text" id="g-res-text"></p>
+      <div class="x-intro-btns">
+        <button type="button" class="x-btn x-btn-hot" id="g-copy">Copiar resultado</button>
+        <button type="button" class="x-btn" id="g-dl">Descargar imagen</button>
+        <button type="button" class="x-btn" id="g-again">Jugar de nuevo</button>
+        <button type="button" class="x-btn" id="g-close">Cerrar</button>
+      </div>
+      <p class="g-res-hint" id="g-res-hint">También podés mantener presionada la imagen (o hacer clic derecho) para guardarla.</p>
+    </div>
+  </div>
+</div>
+
+<script>window.OB_LINKS={sim:"simulador.html",builder:"index.html"};if(!/[?&]ducto=/.test(location.search))location.replace("index.html");</script>
+<script src="js/stations-data.js?v=9"></script>
+<script src="js/pipeline-gen.js?v=9"></script>
+<script src="js/custom-loader.js?v=9"></script>
+<script src="js/sim.js?v=9"></script>
+<script src="js/ui.js?v=9"></script>
+<script src="js/geo.js?v=9"></script>
+<script src="js/alarms.js?v=9"></script>
+<script src="js/scada.js?v=9"></script>
+<script src="js/game.js?v=9"></script>
+<script src="js/ing-ext.js?v=9"></script>
+<script src="js/ing.js?v=9"></script>
+<script src="js/app.js?v=9"></script>
+<script type="module" src="js/view3d.js?v=9"></script>
+</body>
+</html>
