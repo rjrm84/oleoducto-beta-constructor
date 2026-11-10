@@ -32,6 +32,7 @@
     let sub = 'principal';
     let stSel = 'ph';
     let pending = null;
+    let pendingPerm = null;
     const tag = (id, kind, n) => `${(sim.stationById(id).shortName || id).toUpperCase()}_${kind}_${TAGN[id] + (n || 1)}`;
 
     // ---------------- medición ----------------
@@ -73,7 +74,7 @@
     }
 
     // ---------------- eventos ----------------
-    const ev = { elec: {}, filter: {}, n2: {}, esd: {}, log: [] };
+    const ev = { elec: {}, filter: {}, n2: {}, esd: {}, comm: {}, log: [] };
     function evLog(t) {
       const d = S().simDate;
       ev.log.unshift(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} · ${t}`);
@@ -85,6 +86,10 @@
       ev.elec[id] = Object.assign(ev.elec[id] || {}, { cause, tTrip: S().timeSec, ready: false });
     }
     function rearm(id) {
+      if (equip) {
+        const bad = equip.stationPermissives(id).filter((x) => !x[1]);
+        if (bad.length) { app.toast(`No se puede rearmar ${sim.stationById(id).shortName}: falta ${bad.map((x) => x[0].toLowerCase()).join(', ')}`); evLog(`Rearme rechazado en ${sim.stationById(id).shortName}: permisivos no cumplidos`); return false; }
+      }
       sim.clearStationFail(id);
       const st = sim.stationById(id);
       if (st && st.pumps) for (const p of st.pumps) if (p.reserve) p.online = false;
@@ -143,14 +148,21 @@
     function eventTick() {
       for (const id in ev.elec) {
         const e = ev.elec[id];
-        if (!e.ready && S().timeSec - e.tTrip > 600) { e.ready = true; evLog(`Tensión normalizada en ${sim.stationById(id).shortName}: listo para rearme`); }
+        if (!e.ready && S().timeSec - e.tTrip > (e.repairS || 600)) { e.ready = true; evLog(`Tensión normalizada en ${sim.stationById(id).shortName}: listo para rearme`); }
       }
       // filtro tapado: lo modela el módulo de equipos (ΔP de los filtros autolimpiantes)
       if (!equip) for (const fid in ev.filter) if (S().pressuresIn[fid] != null) S().pressuresIn[fid] = Math.max(0, S().pressuresIn[fid] - ev.filter[fid]);
     }
 
     // ---------------- valores por estación ----------------
+    const frozen = {};
     function stv(id) {
+      if (ev.comm[id] && frozen[id]) return frozen[id];
+      const r = stvLive(id);
+      frozen[id] = r;
+      return r;
+    }
+    function stvLive(id) {
       const s = S(), st = sim.stationById(id);
       const pin = s.pressuresIn[id], pout = s.pressuresOut[id];
       const failed = !!s.failedStations[id] || (id === 'ph' && s.phFailed);
@@ -194,6 +206,7 @@
         ['AVISO MEDIDORES (CALIB.)', ma.warn, 3],
         ['SUBESTACIÓN', !!(ev.elec[id] && /subestación/i.test(ev.elec[id].cause)), 1],
         ['DRA / POLÍMERO', !!(st.pumps && st.pumps.length && !sim.stationDraActive(st)), 3],
+        ['FALLA COMUNICACIÓN', !!ev.comm[id], 2],
       ].concat(equip ? equip.annunciators(id) : []);
     }
 
@@ -262,6 +275,11 @@
           return `<div class="sc-pump ${k.cls} ${b ? 'boost' : ''}" title="${esc(p.name)}"><span class="sc-pm ${k.cls}">${b ? '' : `<em>${k.mode}</em>`}</span><b>${esc(p.name.replace(' (booster)', ''))}</b>${b ? '<i>booster</i>' : `<i>${k.rpm} rpm</i>`}</div>`;
         }).join('') + '</div>';
       });
+      if (equip) h += row('Equipos', (id) => {
+        const q = equip.summary(id);
+        if (!q) return '';
+        return `<div class="sc-eqsum ${q.alarm ? 'bad' : ''}"><span>ΔP filtro <b>${fmt(q.dp, 2)}</b></span><span>Cojinete máx <b>${fmt(q.brg, 0)} °C</b></span><span>Aceite <b>${fmt(q.oil, 2)} bar</b></span><span>33 kV <b>${fmt(q.vIn, 1)}</b></span><button type="button" class="sc-link" data-goeq="${id}">Ver equipos${q.alarm ? ' · alarma' : ''}</button></div>`;
+      });
       h += '</tbody></table></div>';
       // anunciador de la estación seleccionada
       h += `<div class="sc-ann-h">Anunciador · ${NAME[stSel]} <span>(tocá el nombre de una columna para cambiar de estación)</span></div><div class="sc-ann">` +
@@ -323,7 +341,9 @@
           g += `<line x1="${px - 60}" y1="${y}" x2="${px + 90}" y2="${y}" class="pid-pipe thin"/>`;
           g += valve(px - 32, y, p.online || !p.reserve, 'MOV');
           g += `<g class="pid-pump ${ps.cls}" data-pump="${p.id}" transform="translate(${px + 15} ${y})"><circle r="22"/><path d="M-8 -12 L14 0 L-8 12 Z" class="pid-imp"/><text y="-30" text-anchor="middle" class="pid-tag">${esc(p.name)}${p.reserve ? ' · reserva' : ''}</text><text y="40" text-anchor="middle" class="pid-val">${ps.mode} · ${ps.rpm} rpm</text></g>`;
-          g += valve(px + 62, y, true, '');
+          const mp = equip ? equip.movPos(id, p.id) : null;
+          if (mp == null) g += valve(px + 62, y, true, '');
+          else g += `<g class="pid-v pid-mov ${mp > 0.95 ? 'open' : mp < 0.05 ? 'closed' : 'moving'}" data-mov="${p.id}" transform="translate(${px + 62} ${y})" style="cursor:pointer"><path d="M-10 -8 L10 8 L10 -8 L-10 8 Z"/><rect x="-7" y="-26" width="14" height="10" rx="2"/><path d="M0 -16 V-6"/><text y="24" text-anchor="middle">MOV ${mp > 0.95 ? 'abierta' : mp < 0.05 ? 'cerrada' : Math.round(mp * 100) + ' %'}</text></g>`;
         });
         g += `<line x1="${px + 90}" y1="${yM}" x2="${px + 170}" y2="${yM}" class="pid-pipe"/>`;
       } else {
@@ -339,6 +359,7 @@
 
       let h = `<div class="pid-top"><div class="pid-sel">${ST.map((x) => `<button type="button" data-st="${x}" class="${x === id ? 'on' : ''}">${sim.stationById(x).shortName}</button>`).join('')}</div><div class="pid-title">${NAME[id]} <span>PK ${st.pkKm} · cota ${Math.round(app.geo.elevAt(st.pkKm)).toLocaleString('es-AR')} m</span></div></div>`;
       h += `<div class="pid-wrap">${g}</div>`;
+      if (equip && equip.summary(id)) h += `<div class="pid-links"><button type="button" class="sc-link" data-goeq="${id}">Ver equipos de ${esc(st.shortName)}: filtros, electricidad 33/6 kV, lubricación, cojinetes, variadores</button>${mains.length ? '<span>Las válvulas de descarga (MOV) se operan tocándolas: cerrar antes de arrancar, abrir con la bomba en marcha.</span>' : ''}</div>`;
       if (mains.length) {
         const spT = st.pDescSpTarget != null ? st.pDescSpTarget : st.pDescSpKgCm2;
         const draOn = sim.stationDraActive(st);
@@ -352,7 +373,8 @@
         h += `<div class="pid-ctl"><div class="pid-ctl-g"><b>Reductora · SP de presión aguas abajo</b><span>Entrada ${fmt(v.pin)} → salida ${fmt(v.pout)} kg/cm² · SP ${fmt(st.pDescSpKgCm2)}</span><label>Nuevo SP <input type="number" id="pid-sp" min="1" max="${MAOP}" step="0.5" value="${fmt(spT)}"> kg/cm²</label><button type="button" class="sc-btn exec" data-pidapply="sp">Aplicar SP</button></div><p class="pid-ctl-note">La reductora protege el tramo en bajada: limita la presión de salida sin bombear.</p></div>`;
       }
       if (pending) h += `<div class="pid-confirm">Confirmar: <b>${esc(pending.label)}</b> <button type="button" class="sc-btn exec" data-exec="1">Ejecutar</button> <button type="button" class="sc-btn" data-cancel="1">Cancelar</button></div>`;
-      else h += `<div class="pid-help">Tocá una bomba para arrancarla o pararla (confirmación en dos pasos). Tocá un medidor para calibrarlo con el prover.</div>`;
+      else h += `<div class="pid-help">Tocá una bomba para arrancarla o pararla y una MOV para abrirla o cerrarla (confirmación en dos pasos). Tocá un medidor para calibrarlo con el prover.</div>`;
+      if (equip && pendingPerm && pendingPerm.st === id) h += `<div class="eq-perm"><b>Permisivos de arranque · ${esc(pendingPerm.name)}</b>${equip.pumpPermissives(id, pendingPerm.pid).map(([t, ok]) => `<span class="${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'} ${esc(t)}</span>`).join('')}</div>`;
       return h;
     }
 
@@ -456,12 +478,15 @@
       else {
         h += '<div class="ev-rearm">' + ST.filter((id) => s.failedStations[id] || ev.elec[id]).map((id) => {
           const e = ev.elec[id] || { cause: 'Falla', ready: true };
-          return `<div class="ev-rc"><b>${sim.stationById(id).shortName}</b><span>${esc(e.cause)}</span><em>${e.ready ? 'Listo para rearme' : 'Esperando normalización…'}</em><button type="button" class="sc-btn exec" data-rearm="${id}" ${e.ready ? '' : 'disabled'}>Rearmar</button></div>`;
+          const perm = equip ? equip.stationPermissives(id) : [];
+          const okAll = perm.every((x) => x[1]);
+          return `<div class="ev-rc"><b>${sim.stationById(id).shortName}</b><span>${esc(e.cause)}</span><em>${e.ready ? (okAll ? 'Listo para rearme' : 'Faltan permisivos') : 'Esperando normalización…'}</em>${perm.length ? `<div class="eq-perm">${perm.map(([t, ok]) => `<span class="${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'} ${esc(t)}</span>`).join('')}</div><div class="me-btns"><button type="button" class="sc-btn" data-closeall="${id}">Cerrar todas las descargas</button>${ev.esd[id] ? `<button type="button" class="sc-btn" data-esdreset="${id}">Reponer paro de emergencia</button>` : ''}</div>` : ''}<button type="button" class="sc-btn exec" data-rearm="${id}" ${e.ready && okAll ? '' : 'disabled'}>Rearmar</button></div>`;
         }).join('') + '</div>';
       }
       const extra = [];
       for (const fid in ev.filter) extra.push(`<button type="button" class="sc-btn" data-fix="filtro" data-fid="${fid}">Cambiar a filtro B en ${sim.stationById(fid).shortName}</button>`);
-      if (ev.n2.ph) extra.push(`<button type="button" class="sc-btn" data-fix="n2">Reponer N2 en ${HN}</button>`);
+      for (const nid in ev.n2) extra.push(`<button type="button" class="sc-btn" data-fix="n2" data-fid="${nid}">Reponer N2 en ${sim.stationById(nid).shortName}</button>`);
+      for (const cid in ev.comm) extra.push(`<button type="button" class="sc-btn" data-fix="comm" data-fid="${cid}">Restablecer comunicación con ${sim.stationById(cid).shortName}</button>`);
       if (s.scenarioActive) extra.push('<button type="button" class="sc-btn" data-fix="clear">Normalizar escenario</button>');
       if (extra.length) h += `<div class="me-btns">${extra.join('')}</div>`;
       // estrategia global
@@ -469,10 +494,12 @@
       h += `<h3 class="sc-h3">Estrategia global</h3>` + (pb.length ? '<ul class="ev-pb">' + pb.map((x) => `<li><label><input type="checkbox" data-pb="${esc(x.id)}" ${x.done ? 'checked' : ''}> ${esc(x.text)}</label></li>`).join('') + '</ul>' : '<p class="me-empty">Se activa con la primera falla.</p>');
       h += `<h3 class="sc-h3">Registro</h3><div class="ev-log">${ev.log.length ? ev.log.map((l) => `<div>${esc(l)}</div>`).join('') : '<div class="me-empty">Sin eventos.</div>'}</div>`;
       h += '</div><div class="ev-right">';
+      if (faults) h += faults.formHtml() + faults.activeHtml();
+      h += `<details class="ev-quick" ${faults ? '' : 'open'}><summary>Escenarios guiados rápidos</summary>`;
       for (const gname of groups) {
         h += `<h3 class="sc-h3">${gname}</h3><div class="ev-cards">` + EVENTS.filter((e) => e.g === gname).map((e) => `<div class="ev-card"><b>${esc(e.t)}</b><p>${esc(e.d)}</p><button type="button" class="sc-btn" data-ev="${e.k}">Disparar</button></div>`).join('') + '</div>';
       }
-      return h + '</div></div>';
+      return h + '</details></div></div>';
     }
 
     // ---------------- render ----------------
@@ -480,7 +507,7 @@
     let lastKey = '';
     function render(force) {
       if (sub === 'clasica') return;
-      if (!force && (root.contains(document.activeElement) && document.activeElement.tagName === 'INPUT')) return;
+      if (!force && (root.contains(document.activeElement) && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT'))) return;
       const html = sub === 'equipos' && equip ? equip.render() : ext && ext.render[sub] ? ext.render[sub]() : sub === 'principal' ? principal() : sub === 'estacion' ? pid() : sub === 'medicion' ? medicion() : eventos();
       if (sub === 'medicion' && !force && proving) {
         // no pisar el panel del prover mientras corre
@@ -526,6 +553,25 @@
       }
       if (equip && sub === 'equipos') { const tq = e.target.closest(equip.selector); if (tq && equip.click(tq)) { render(true); return; } }
       if (ext) { const tx = e.target.closest(ext.selector); if (tx && ext.click(tx)) { render(true); return; } }
+      if (faults && sub === 'eventos') { const tf = e.target.closest(faults.selector); if (tf && faults.click(tf)) { render(true); return; } }
+      const g2 = e.target.closest('[data-goeq],[data-closeall],[data-esdreset]');
+      if (g2) {
+        const d2 = g2.dataset;
+        if (d2.goeq && equip) { equip.select(d2.goeq); setSub('equipos'); return; }
+        if (d2.closeall && equip) { equip.closeAllMovs(d2.closeall); app.toast('Cerrando válvulas de descarga (carrera 1 min)'); }
+        if (d2.esdreset) { delete ev.esd[d2.esdreset]; if (ev.elec[d2.esdreset]) ev.elec[d2.esdreset].cause = 'Paro de emergencia (repuesto)'; evLog(`${sim.stationById(d2.esdreset).shortName}: pulsador de paro de emergencia repuesto`); }
+        render(true); return;
+      }
+      if (sub === 'estacion' && equip) {
+        const mv = e.target.closest('[data-mov]');
+        if (mv) {
+          const p = sim.stationById(stSel).pumps.find((x) => x.id === mv.dataset.mov);
+          const pos = equip.movPos(stSel, p.id);
+          const open = !(pos > 0.5);
+          pending = { mov: p.id, open, label: `${open ? 'abrir' : 'cerrar'} válvula de descarga de ${p.name}` };
+          render(true); return;
+        }
+      }
       const t = e.target.closest('[data-st],[data-pump],[data-meter],[data-exec],[data-cancel],[data-prove],[data-accept],[data-reprove],[data-close],[data-ev],[data-rearm],[data-fix]');
       if (!t) return;
       const d = t.dataset;
@@ -534,11 +580,18 @@
         const st = sim.stationById(stSel), p = st.pumps.find((x) => x.id === d.pump);
         if (!p) return;
         if (S().failedStations[stSel]) { app.toast('Estación fuera de servicio: primero rearmala en Eventos y fallas'); return; }
+        const isB = (p.role || '').includes('booster');
+        if (!p.online && equip && !isB) {
+          pendingPerm = { st: stSel, pid: p.id, name: p.name };
+          const bad = equip.pumpPermissives(stSel, p.id).filter((x) => !x[1]);
+          if (bad.length) { pending = null; app.toast(`Permisivos no cumplidos para ${p.name}: ${bad.map((x) => x[0].toLowerCase()).join(', ')}`); render(true); return; }
+        } else pendingPerm = null;
         pending = { pump: p.id, on: !p.online, label: `${p.online ? 'parar' : 'arrancar'} ${p.name}` };
         render(true); return;
       }
-      if (d.exec && pending) { sim.setPump(stSel, pending.pump, pending.on); app.toast('Comando ejecutado: ' + pending.label); evLog(`${sim.stationById(stSel).shortName}: ${pending.label}`); pending = null; render(true); return; }
-      if (d.cancel) { pending = null; render(true); return; }
+      if (d.exec && pending && pending.mov) { equip.setMov(stSel, pending.mov, pending.open); app.toast('Comando ejecutado: ' + pending.label); pending = null; render(true); return; }
+      if (d.exec && pending) { if (pending.on && equip) { equip.markManualStart(stSel, pending.pump); evLog(`${sim.stationById(stSel).shortName}: arranque con descarga cerrada; abrir la MOV con la bomba en marcha`); } pendingPerm = null; sim.setPump(stSel, pending.pump, pending.on); app.toast('Comando ejecutado: ' + pending.label); evLog(`${sim.stationById(stSel).shortName}: ${pending.label}`); pending = null; render(true); return; }
+      if (d.cancel) { pending = null; pendingPerm = null; render(true); return; }
       if (d.meter) { const [id, k] = d.meter.split(':'); setSub('medicion'); startProving(id, Number(k)); return; }
       if (d.prove) { const [id, k] = d.prove.split(':'); startProving(id, Number(k)); return; }
       if (d.accept && proving) {
@@ -555,12 +608,14 @@
       if (d.ev) { const e2 = EVENTS.find((x) => x.k === d.ev); if (e2) { e2.run(); app.toast(e2.t); render(true); } return; }
       if (d.rearm) { rearm(d.rearm); render(true); return; }
       if (d.fix === 'filtro') { const fid = d.fid || 'ac'; delete ev.filter[fid]; if (equip) equip.unclog(fid); evLog(`${(sim.stationById(fid) || {}).shortName || fid}: cambio a filtro B, ΔP normal`); }
-      if (d.fix === 'n2') { delete ev.n2.ph; evLog(`${HN}: presión de N2 repuesta`); }
-      if (d.fix === 'clear') { app.normalOps(); Object.keys(ev.elec).forEach((k) => delete ev.elec[k]); ev.esd = {}; evLog('Escenario normalizado'); }
+      if (d.fix === 'n2') { const nid = d.fid || 'ph'; delete ev.n2[nid]; evLog(`${sim.stationById(nid).shortName}: presión de N2 repuesta`); }
+      if (d.fix === 'comm') { delete ev.comm[d.fid]; evLog(`${sim.stationById(d.fid).shortName}: comunicación restablecida`); }
+      if (d.fix === 'clear') { app.normalOps(); Object.keys(ev.elec).forEach((k) => delete ev.elec[k]); ev.esd = {}; ev.comm = {}; evLog('Escenario normalizado'); }
       render(true);
     });
     root.addEventListener('change', (e) => {
       if (ext && ext.change(e.target)) { render(true); return; }
+      if (faults && faults.change(e.target)) { if (e.target.tagName === 'SELECT') e.target.blur(); render(true); return; }
       const c = e.target.closest('[data-pb]');
       if (c) sim.togglePlaybookCheck(c.dataset.pb);
     });
@@ -568,6 +623,7 @@
     const ext = global.createIngExt ? global.createIngExt(app, { meters, qInd, evLog, setSub: (k) => setSub(k) }) : null;
     const equip = global.createEquip ? global.createEquip(app, { TAGN, NAME, ev, evLog }) : null;
     if (equip && app.alarms && app.alarms.addSource) app.alarms.addSource(() => equip.alarms());
+    const faults = global.createFaults ? global.createFaults(app, { ev, evLog, equip: () => equip }) : null;
     nav();
     setSub('principal');
 
@@ -584,6 +640,7 @@
         }
       }
       if (equip) equip.update();
+      if (faults) faults.tick(dt);
       eventTick();
       provingStep();
       if (ext) ext.update();
@@ -592,7 +649,7 @@
       if (acc > 0.5) { acc = 0; render(false); }
     }
 
-    return { update, resetEvents() { Object.keys(ev.elec).forEach((k) => delete ev.elec[k]); ev.filter = {}; ev.n2 = {}; ev.esd = {}; if (equip) equip.reset(); }, meters, equip, ev };
+    return { update, resetEvents() { Object.keys(ev.elec).forEach((k) => delete ev.elec[k]); ev.filter = {}; ev.n2 = {}; ev.esd = {}; ev.comm = {}; if (equip) equip.reset(); if (faults) faults.reset(); }, meters, equip, ev, get faults() { return faults; } };
   }
 
   global.createIng = createIng;
