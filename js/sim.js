@@ -1152,10 +1152,12 @@
             // v7: la presión de cabecera es la necesaria para el caudal (no la máxima de bombas)
             if (st._manualCv != null) {
               pOut = pumpBoostKg(st) * stationRampF('ph') * Math.max(0, Math.min(1, Number(st._manualCv) / 100)); pLine = pOut;
-            } else if (!state.scenarioActive) {
+            } else if (!state.scenarioActive && !st._spLocal) {
               const needPh = requiredDischargeKg(0, flow);
               if (needPh != null) { pOut = Math.min(pOut, Math.max(needPh, 2)); pLine = pOut; }
             }
+            // v16: golpe del controlador al volver a automático con SP lejos del PV
+            if (st._bumpKg) { pOut = Math.max(0, pOut + Number(st._bumpKg)); pLine = pOut; }
           }
         } else {
           const prev = sorted[i - 1];
@@ -1234,13 +1236,15 @@
               if (manCv == null && st.pDescSpKgCm2 != null) pOut = Math.min(pOut, Number(st.pDescSpKgCm2));
               // v7: cada EB entrega la presión necesaria para el caudal (PID con selector):
               // más caudal o menos DRA → más presión; tope en el SP del PID.
-              if (!state.scenarioActive && boost > 0 && manCv == null) {
+              // v16: con SP local (liberado del maestro) la estación sostiene su propio SP y deja de balancear la línea
+              if (!state.scenarioActive && boost > 0 && manCv == null && !st._spLocal) {
                 const need = requiredDischargeKg(i, flow);
                 if (need != null) {
                   const floor = st.id === 'rt' || (isCustom && st.id === lastPumpId()) ? 0 : pIn; // RT puede estrangular para entregar el SP de LC
                   pOut = Math.min(pOut, Math.max(floor, need));
                 }
               }
+              if (st._bumpKg && boost > 0) pOut = Math.max(pIn, pOut + Number(st._bumpKg));
 
               // MAOP: alarm at 90%, clamp/trip at 100% — keep disc at MAOP (no full collapse)
               const maop = maopForStations(prev.id, st.id);
