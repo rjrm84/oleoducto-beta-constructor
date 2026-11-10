@@ -452,6 +452,7 @@
       <div class="b-row"><button type="button" class="b-btn b-btn-hot" id="tz-elev">Obtener altimetría real</button><label class="b-chk"><input type="checkbox" id="tz-grid" ${spec.noTerrain ? '' : 'checked'}> Bajar también la grilla de terreno para la vista 3D</label></div>
       <div class="b-prog" id="tz-prog" hidden><i></i></div><p class="b-note" id="tz-msg">Cotas del modelo digital de elevación Copernicus GLO-90 (resolución 90 m) a través de Open-Meteo.</p></div>
     <div class="b-box"><h3>Perfil del terreno</h3><div id="tz-prof">${profileSvg({ valves: false })}</div></div>
+    <div class="b-box"><h3>Importar la traza de su ducto</h3><p class="b-note">Archivo KMZ o KML (Google Earth), GPX, GeoJSON o CSV con latitud y longitud. Si el archivo trae cotas, se usan como perfil.</p><div class="b-row"><label class="b-btn b-btn-hot b-file">Importar traza<input type="file" id="tz-file" accept=".kmz,.kml,.gpx,.geojson,.json,.csv,.txt"></label><span class="b-note" id="tz-file-msg"></span></div></div>
     <details class="b-box"><summary><b>Cargar a mano</b> · coordenadas o perfil PK–cota</summary>
       <label class="b-f" for="tz-coords">Coordenadas del trazado (una por línea: latitud, longitud)<textarea id="tz-coords" rows="5" placeholder="-38.355, -68.788&#10;-38.94, -67.98">${esc(spec.route.map((p) => p[0].toFixed(5) + ', ' + p[1].toFixed(5)).join('\n'))}</textarea></label>
       <div class="b-row"><button type="button" class="b-btn b-btn-sm" id="tz-coords-ok">Usar estas coordenadas</button></div>
@@ -549,6 +550,29 @@
       setTimeout(() => map && map.invalidateSize(), 120);
     }
     $('tz-elev').onclick = () => fetchProfile();
+    $('tz-file').onchange = async (ev) => {
+      const f = ev.target.files && ev.target.files[0];
+      if (!f) return;
+      const msg = $('tz-file-msg');
+      try {
+        const r = await readTrace(f);
+        if (r.pts.length < 2) throw new Error('El archivo no tiene una línea con al menos dos puntos');
+        spec.route = simplifyRoute(r.pts.map((p) => [p[0], p[1]]), 600);
+        routeChanged();
+        if (r.pts.every((p) => isFinite(p[2])) && new Set(r.pts.map((p) => Math.round(p[2]))).size > 3) {
+          let acc = 0; const prof = [];
+          r.pts.forEach((p, i) => { if (i) acc += G.hav(r.pts[i - 1], p); prof.push({ pk: +acc.toFixed(3), elev: +p[2].toFixed(1), lat: +p[0].toFixed(6), lon: +p[1].toFixed(6) }); });
+          const kf = acc > 0 ? spec.lengthKm / acc : 1; prof.forEach((x) => { x.pk = +(x.pk * kf).toFixed(3); });
+          const step = Math.max(1, Math.floor(prof.length / 1500));
+          spec.profile = prof.filter((x, i) => i % step === 0 || i === prof.length - 1);
+          spec.profileStale = false; spec.profileApprox = false;
+        }
+        markDirty();
+        const note = `${r.name ? r.name + ' · ' : ''}${r.pts.length} puntos, ${fmt(spec.lengthKm)} km${spec.profileStale || !spec.profile.length ? ' · falta la altimetría: tocá «Obtener altimetría real»' : ' · perfil tomado del archivo'}`;
+        go('trazado');
+        toast(note); const m2 = $('tz-file-msg'); if (m2) m2.textContent = note;
+      } catch (err) { msg.textContent = 'No se pudo leer el archivo: ' + err.message; }
+    };
     $('tz-coords-ok').onclick = () => {
       const pts = $('tz-coords').value.split(/\n+/).map((l) => l.match(/(-?\d+(?:\.\d+)?)\s*[,; \t]\s*(-?\d+(?:\.\d+)?)/)).filter(Boolean).map((m) => [Number(m[1]), Number(m[2])]).filter((p) => Math.abs(p[0]) <= 90 && Math.abs(p[1]) <= 180);
       if (pts.length < 2) { toast('Hacen falta al menos dos coordenadas válidas'); return; }
@@ -567,6 +591,65 @@
       toast(Math.abs(f - 1) > 0.01 ? `Perfil escalado al largo del trazado (×${f.toFixed(3)})` : 'Perfil cargado');
     });
   };
+
+  // ---- importación de trazas: KMZ, KML, GPX, GeoJSON y CSV ----
+  async function unzipFirst(buf, re) {
+    const u8 = new Uint8Array(buf), dv = new DataView(buf);
+    let eocd = -1;
+    for (let i = u8.length - 22; i >= Math.max(0, u8.length - 66000); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    if (eocd < 0) throw new Error('KMZ dañado');
+    let off = dv.getUint32(eocd + 16, true);
+    const n = dv.getUint16(eocd + 10, true);
+    for (let k = 0; k < n; k++) {
+      const method = dv.getUint16(off + 10, true), csize = dv.getUint32(off + 20, true);
+      const nl = dv.getUint16(off + 28, true), xl = dv.getUint16(off + 30, true), cl = dv.getUint16(off + 32, true), lho = dv.getUint32(off + 42, true);
+      const name = new TextDecoder().decode(u8.subarray(off + 46, off + 46 + nl));
+      if (re.test(name)) {
+        const lnl = dv.getUint16(lho + 26, true), lxl = dv.getUint16(lho + 28, true);
+        const data = u8.subarray(lho + 30 + lnl + lxl, lho + 30 + lnl + lxl + csize);
+        if (method === 0) return new TextDecoder().decode(data);
+        const out = await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+        return new TextDecoder().decode(out);
+      }
+      off += 46 + nl + xl + cl;
+    }
+    throw new Error('el KMZ no contiene un archivo KML');
+  }
+  async function readTrace(file) {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    let text = ext === 'kmz' ? await unzipFirst(await file.arrayBuffer(), /\.kml$/i) : await file.text();
+    const name = file.name.replace(/\.[^.]+$/, '');
+    if (ext === 'kmz' || ext === 'kml' || /<kml/i.test(text.slice(0, 400))) {
+      const doc = new DOMParser().parseFromString(text, 'application/xml');
+      let best = [];
+      doc.querySelectorAll('LineString coordinates, coordinates').forEach((c) => {
+        const pts = c.textContent.trim().split(/\s+/).map((t) => t.split(',').map(Number)).filter((a) => a.length >= 2 && isFinite(a[0]) && isFinite(a[1])).map((a) => [a[1], a[0], a.length > 2 && a[2] !== 0 ? a[2] : NaN]);
+        if (pts.length > best.length) best = pts;
+      });
+      return { name, pts: best };
+    }
+    if (ext === 'gpx' || /<gpx/i.test(text.slice(0, 400))) {
+      const doc = new DOMParser().parseFromString(text, 'application/xml');
+      let nodes = [...doc.querySelectorAll('trkpt')]; if (!nodes.length) nodes = [...doc.querySelectorAll('rtept')];
+      return { name, pts: nodes.map((n) => { const e = n.querySelector('ele'); return [Number(n.getAttribute('lat')), Number(n.getAttribute('lon')), e ? Number(e.textContent) : NaN]; }) };
+    }
+    if (ext === 'geojson' || ext === 'json' || /^\s*\{/.test(text)) {
+      const g = JSON.parse(text); let best = [];
+      const visit = (o) => { if (!o) return; if (o.type === 'FeatureCollection') o.features.forEach(visit); else if (o.type === 'Feature') visit(o.geometry); else if (o.type === 'LineString') { if (o.coordinates.length > best.length) best = o.coordinates; } else if (o.type === 'MultiLineString') o.coordinates.forEach((c) => { if (c.length > best.length) best = c; }); else if (o.type === 'GeometryCollection') o.geometries.forEach(visit); };
+      visit(g);
+      return { name, pts: best.map((c) => [c[1], c[0], c.length > 2 ? c[2] : NaN]) };
+    }
+    const pts = text.split(/\n+/).map((l) => l.match(/(-?\d+(?:[.,]\d+)?)\s*[;,\t ]\s*(-?\d+(?:[.,]\d+)?)(?:\s*[;,\t ]\s*(-?\d+(?:[.,]\d+)?))?/)).filter(Boolean).map((m) => [Number(m[1].replace(',', '.')), Number(m[2].replace(',', '.')), m[3] ? Number(m[3].replace(',', '.')) : NaN]).filter((p) => Math.abs(p[0]) <= 90 && Math.abs(p[1]) <= 180);
+    return { name, pts };
+  }
+  // Douglas-Peucker sobre lat/lon (aprox. en grados) hasta un máximo de vértices
+  function simplifyRoute(pts, maxN) {
+    if (pts.length <= maxN) return pts;
+    let tol = 0.00005, out = pts;
+    const dp = (a, tolSq) => { const keep = new Uint8Array(a.length); keep[0] = keep[a.length - 1] = 1; const st = [[0, a.length - 1]]; while (st.length) { const [i, j] = st.pop(); let md = -1, mi = -1; const [y1, x1] = a[i], [y2, x2] = a[j]; const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy || 1e-12; for (let k = i + 1; k < j; k++) { const t = Math.max(0, Math.min(1, ((a[k][1] - x1) * dx + (a[k][0] - y1) * dy) / L2)); const ex = x1 + t * dx - a[k][1], ey = y1 + t * dy - a[k][0]; const d = ex * ex + ey * ey; if (d > md) { md = d; mi = k; } } if (md > tolSq && mi > 0) { keep[mi] = 1; st.push([i, mi], [mi, j]); } } return a.filter((_, k) => keep[k]); };
+    while (out.length > maxN && tol < 1) { out = dp(pts, tol * tol); tol *= 1.6; }
+    return out;
+  }
 
   // Open-Meteo cuenta cada coordenada: el plan gratuito admite ~600 por minuto. Se espacian los pedidos
   // y, ante un 429, se espera un minuto y se reintenta.
