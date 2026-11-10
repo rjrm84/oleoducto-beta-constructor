@@ -9,8 +9,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="css/style.css?v=9">
-<link rel="stylesheet" href="css/app.css?v=9">
+<link rel="stylesheet" href="css/style.css?v=10">
+<link rel="stylesheet" href="css/app.css?v=10">
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -444,13 +444,13 @@
   <!-- Bienvenida -->
   <div class="x-intro" id="x-intro" hidden>
     <div class="x-intro-card">
-      <div class="x-intro-eyebrow">Neuquén → Mendoza · 530 km · cota máxima 1.985 m</div>
-      <h1>530 km de crudo cruzando los Andes.<br>Vos estás a cargo.</h1>
-      <p>Un gemelo digital con física real: Darcy-Weisbach sobre la altimetría del ducto, 9 estaciones, 22 válvulas de bloqueo y 17 tipos de falla.</p>
+      <div class="x-intro-eyebrow">Oleoducto Beta · simulador de entrenamiento</div>
+      <h1>Un oleoducto completo para operar.<br>Vos estás a cargo.</h1>
+      <p>Un gemelo digital con física real: hidráulica sobre la altimetría del ducto, estaciones de bombeo, válvulas de bloqueo, scraper, SCADA de equipos y un catálogo de fallas programables.</p>
       <div class="x-intro-btns">
-        <button type="button" class="x-btn x-btn-hot" data-intro="desafio">Jugar la misión del día</button>
-        <button type="button" class="x-btn" data-intro="vista-3d">Explorar en 3D</button>
-        <button type="button" class="x-btn" data-intro="scada">Entrar a la sala de control</button>
+        <button type="button" class="x-btn x-btn-hot" data-intro="desafio">Desafío</button>
+        <button type="button" class="x-btn" data-intro="scada">Simulador</button>
+        <button type="button" class="x-btn" data-intro="vista-3d">Vista 3D</button>
       </div>
       <p class="x-intro-note">Simulación de entrenamiento con valores estimados. No es un SCADA en vivo ni representa a ninguna operadora.</p>
     </div>
@@ -473,18 +473,20 @@
 </div>
 
 <script>window.OB_LINKS={sim:"simulador.html",builder:"index.html"};if(!/[?&]ducto=/.test(location.search))location.replace("index.html");</script>
-<script src="js/stations-data.js?v=9"></script>
-<script src="js/pipeline-gen.js?v=9"></script>
-<script src="js/custom-loader.js?v=9"></script>
-<script src="js/sim.js?v=9"></script>
-<script src="js/ui.js?v=9"></script>
-<script src="js/geo.js?v=9"></script>
-<script src="js/alarms.js?v=9"></script>
-<script src="js/scada.js?v=9"></script>
-<script src="js/game.js?v=9"></script>
-<script src="js/ing-ext.js?v=9"></script>
-<script src="js/ing.js?v=9"></script>
-<script src="js/app.js?v=9"></script>
-<script type="module" src="js/view3d.js?v=9"></script>
+<script src="js/stations-data.js?v=10"></script>
+<script src="js/pipeline-gen.js?v=10"></script>
+<script src="js/custom-loader.js?v=10"></script>
+<script src="js/sim.js?v=10"></script>
+<script src="js/ui.js?v=10"></script>
+<script src="js/geo.js?v=10"></script>
+<script src="js/alarms.js?v=10"></script>
+<script src="js/scada.js?v=10"></script>
+<script src="js/game.js?v=10"></script>
+<script src="js/ing-ext.js?v=10"></script>
+<script src="js/equip.js?v=10"></script>
+<script src="js/faults.js?v=10"></script>
+<script src="js/ing.js?v=10"></script>
+<script src="js/app.js?v=10"></script>
+<script type="module" src="js/view3d.js?v=10"></script>
 </body>
 </html>
