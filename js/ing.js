@@ -85,6 +85,18 @@
       sim.failStation(id);
       ev.elec[id] = Object.assign(ev.elec[id] || {}, { cause, tTrip: S().timeSec, ready: false });
     }
+    const RAMP = META.rampFlowM3hPerMin || 15;
+    const dispQ = () => (S().dispatchQ != null ? S().dispatchQ : QDEF);
+    // arranque después de una parada: se baja el caudal a un valor de arranque y se sube en rampa hasta el despacho
+    function startRamp(why) {
+      const s = S(), disp = dispQ();
+      const q0 = Math.max(150, Math.min(disp, (s.lineFlow || 0) > 50 ? s.lineFlow : disp * 0.4));
+      if (s.globalFlowSetpoint > q0) s.globalFlowSetpoint = q0;
+      if (s.flowTarget === disp && s._rampWhy) return;
+      s._rampWhy = why;
+      sim.rampFlowTo(disp);
+      evLog(`Arranque en rampa por ${why}: ${fmt(Math.min(q0, s.globalFlowSetpoint), 0)} → ${fmt(disp, 0)} m³/h (despacho) a ${RAMP} m³/h por minuto`);
+    }
     function rearm(id) {
       if (equip) {
         const bad = equip.stationPermissives(id).filter((x) => !x[1]);
@@ -94,7 +106,7 @@
       const st = sim.stationById(id);
       if (st && st.pumps) for (const p of st.pumps) if (p.reserve) p.online = false;
       delete ev.elec[id]; delete ev.esd[id];
-      if (!Object.keys(S().failedStations).length && !S().phFailed) sim.rampFlowTo(QDEF);
+      if (!Object.keys(S().failedStations).length && !S().phFailed) startRamp(`rearme de ${st.shortName}`);
       evLog(`Rearme de ${st.shortName}: bombas en marcha`);
     }
     const EVENTS = CUST ? customEvents() : [
@@ -207,6 +219,9 @@
         ['SUBESTACIÓN', !!(ev.elec[id] && /subestación/i.test(ev.elec[id].cause)), 1],
         ['DRA / POLÍMERO', !!(st.pumps && st.pumps.length && !sim.stationDraActive(st)), 3],
         ['FALLA COMUNICACIÓN', !!ev.comm[id], 2],
+        ['ALIVIO PSV ABIERTA', !!((s.relief || {})[id] && s.relief[id].open), 1],
+        ['DISPARO ALTA PRESIÓN (PSHH)', /PSHH/.test((s.tripCause || {})[id] || ''), 1],
+        ['LÍNEA BLOQUEADA', !!(s.blockage && s.blockage.stationId === id), 1],
       ].concat(equip ? equip.annunciators(id) : []);
     }
 
@@ -253,7 +268,7 @@
       h += cols.map((id) => `<th class="sc-col ${id === stSel ? 'sel' : ''}" data-st="${id}">${id === 'lc' && !CUST ? 'LUJÁN DE CUYO · UGARTECHE' : NAME[id]}</th>`).join('') + '</tr></thead><tbody>';
       const row = (lab, f) => `<tr><th class="sc-rowh">${lab}</th>${cols.map((id) => `<td>${f(id, stv(id))}</td>`).join('')}</tr>`;
       h += row('Caudal m³/h', (id, v) => id === 'pa' ? '<div class="sc-note">Cálculo aprox. scraper VB18</div>' :
-        box(tag(id, 'FT'), fmt(v.q, 1), 'm³/h', id === 'ph' && Math.abs(v.q - s.globalFlowSetpoint) > 40 ? 'hi' : '') + box('SP', fmt(id === 'ph' ? s.globalFlowSetpoint : CUST ? (v.st.qMaxM3h || 850) : 850, 0), 'm³/h', 'sp'));
+        box(tag(id, 'FT'), fmt(v.q, 1), 'm³/h', id === 'ph' && Math.abs(v.q - s.globalFlowSetpoint) > 40 ? 'hi' : '') + (id === 'ph' ? box('DESPACHO', fmt(dispQ(), 0), 'm³/h', s.flowTarget != null ? 'hi' : '') : '') + box('SP', fmt(id === 'ph' ? s.globalFlowSetpoint : CUST ? (v.st.qMaxM3h || 850) : 850, 0), 'm³/h', 'sp'));
       h += row('Caudal inyec. m³/h', (id, v) => id === 'lc' && !CUST ? box('UG_FR_' + (TAGN.ug + 3), fmt(sim.stationInjectionTotal(sim.stationById('ug')), 1), 'm³/h') : id === 'pa' ? '' : box(tag(id, 'FT', 2), fmt(v.inj, 1), 'm³/h'));
       h += row('Presión aspirac. kg/cm²', (id, v) => id === 'pa' ? box('VB18_PTUP', fmt(v.pin), 'kg/cm²') :
         box(tag(id, 'PT', 4), fmt(v.pin), 'kg/cm²', v.st.pAspSpKgCm2 != null && v.pin < v.st.pAspSpKgCm2 - 1 ? 'bad' : '') + (v.st.pAspSpKgCm2 != null ? box('SP', fmt(v.st.pAspSpKgCm2), 'kg/cm²', 'sp') : ''));
@@ -300,7 +315,9 @@
       const val = (x, y, t, vv, u, cls) => `<g transform="translate(${x} ${y})"><rect x="-58" y="-14" width="116" height="34" class="pid-box ${cls || ''}"/><text y="-2" text-anchor="middle" class="pid-tag">${t}</text><text y="15" text-anchor="middle" class="pid-val">${vv} ${u}</text></g>`;
       // ducto entrada y válvula
       g += `<line x1="20" y1="${yM}" x2="140" y2="${yM}" class="pid-pipe" marker-end="url(#pid-ar)"/><text x="20" y="${yM - 18}" class="pid-lab">Ducto entrada</text>`;
-      g += valve(160, yM, !v.failed || true, `MOV-${TAGN[id] + 5}`);
+      const movG = (x, y, pos, attr, label, below) => `<g class="pid-v pid-mov ${pos > 0.95 ? 'open' : pos < 0.05 ? 'closed' : 'moving'}" ${attr} transform="translate(${x} ${y})" style="cursor:pointer"><path d="M-10 -8 L10 8 L10 -8 L-10 8 Z"/><rect x="-7" y="-26" width="14" height="10" rx="2"/><path d="M0 -16 V-6"/><text y="${below ? 24 : -32}" text-anchor="middle">${label}${below === 'short' ? (pos > 0.95 || pos < 0.05 ? '' : ' ' + Math.round(pos * 100) + ' %') : ' ' + (pos > 0.95 ? 'abierta' : pos < 0.05 ? 'cerrada' : Math.round(pos * 100) + ' %')}</text></g>`;
+      const svIn = equip ? equip.stValvePos(id, 'in') : null;
+      g += svIn == null ? valve(160, yM, !v.failed || true, `MOV-${TAGN[id] + 5}`) : movG(160, yM, svIn, 'data-stv="in"', `MOV-${TAGN[id] + 5}`, false);
       g += val(160, yM + 52, tag(id, 'PT', 4), fmt(v.pin), 'kg/cm²', st.pAspSpKgCm2 != null && v.pin < st.pAspSpKgCm2 - 1 ? 'bad' : '');
       // filtros
       const dpf = 0.3 + (ev.filter[id] || 0);
@@ -339,11 +356,12 @@
           const y = y0 + k * 92;
           const ps = pumpState(id, p, v.failed, v.cv);
           g += `<line x1="${px - 60}" y1="${y}" x2="${px + 90}" y2="${y}" class="pid-pipe thin"/>`;
-          g += valve(px - 32, y, p.online || !p.reserve, 'MOV');
-          g += `<g class="pid-pump ${ps.cls}" data-pump="${p.id}" transform="translate(${px + 15} ${y})"><circle r="22"/><path d="M-8 -12 L14 0 L-8 12 Z" class="pid-imp"/><text y="-30" text-anchor="middle" class="pid-tag">${esc(p.name)}${p.reserve ? ' · reserva' : ''}</text><text y="40" text-anchor="middle" class="pid-val">${ps.mode} · ${ps.rpm} rpm</text></g>`;
+          const sp2 = equip ? equip.sucPos(id, p.id) : null;
+          g += sp2 == null ? valve(px - 32, y, p.online || !p.reserve, 'MOV') : movG(px - 32, y, sp2, `data-suc="${p.id}"`, 'Asp', 'short');
+          g += `<g class="pid-pump ${ps.cls}" data-pump="${p.id}" transform="translate(${px + 15} ${y})"><circle r="22"/><path d="M-8 -12 L14 0 L-8 12 Z" class="pid-imp"/><text y="-30" text-anchor="middle" class="pid-tag">${esc(p.name)}${p.reserve ? ' · reserva' : ''}</text><text y="40" text-anchor="middle" class="pid-val">${ps.mode} · ${ps.rpm} rpm${equip && equip.pumpCaseP(id, p.id) != null && ps.cls === 'run' ? ' · ' + fmt(equip.pumpCaseP(id, p.id), 1) + ' kg' : ''}</text></g>`;
           const mp = equip ? equip.movPos(id, p.id) : null;
           if (mp == null) g += valve(px + 62, y, true, '');
-          else g += `<g class="pid-v pid-mov ${mp > 0.95 ? 'open' : mp < 0.05 ? 'closed' : 'moving'}" data-mov="${p.id}" transform="translate(${px + 62} ${y})" style="cursor:pointer"><path d="M-10 -8 L10 8 L10 -8 L-10 8 Z"/><rect x="-7" y="-26" width="14" height="10" rx="2"/><path d="M0 -16 V-6"/><text y="24" text-anchor="middle">MOV ${mp > 0.95 ? 'abierta' : mp < 0.05 ? 'cerrada' : Math.round(mp * 100) + ' %'}</text></g>`;
+          else g += `<g class="pid-v pid-mov ${mp > 0.95 ? 'open' : mp < 0.05 ? 'closed' : 'moving'}" data-mov="${p.id}" transform="translate(${px + 62} ${y})" style="cursor:pointer"><path d="M-10 -8 L10 8 L10 -8 L-10 8 Z"/><rect x="-7" y="-26" width="14" height="10" rx="2"/><path d="M0 -16 V-6"/><text y="24" text-anchor="middle">Desc${mp > 0.95 || mp < 0.05 ? '' : ' ' + Math.round(mp * 100) + ' %'}</text></g>`;
         });
         g += `<line x1="${px + 90}" y1="${yM}" x2="${px + 170}" y2="${yM}" class="pid-pipe"/>`;
       } else {
@@ -351,21 +369,24 @@
       }
       // válvula de control + DRA + salida
       const cx = px + 200;
+      const svOut = equip ? equip.stValvePos(id, 'out') : null;
+      if (svOut != null) g += movG(cx + 78, yM, svOut, 'data-stv="out"', `MOV-${TAGN[id] + 7}`, true);
+      if (mains.length) { const rl = (S().relief || {})[id] || {}; g += `<g class="pid-psv ${rl.open ? 'open' : ''}" transform="translate(${cx - 40} ${yM})"><path d="M0 0 V34" class="pid-pipe thin"/><path d="M-8 34 L8 34 L0 48 Z"/><text y="64" text-anchor="middle" class="pid-tag">PSV ${rl.sp || ''}</text><text y="78" text-anchor="middle" class="pid-val">${rl.open ? 'ALIVIANDO' : 'cerrada'}</text></g>`; }
       g += `<g class="pid-cv" transform="translate(${cx} ${yM})"><path d="M-12 -9 L12 9 L12 -9 L-12 9 Z"/><path d="M0 0 V-24 M-10 -24 H10"/><text y="-32" text-anchor="middle" class="pid-tag">${id === 'lc' ? 'PCV-' + (CUST ? TAGN.lc + 1 : 1201) : (st.type === 'regulating' ? 'PCV-' : 'ASC-') + (TAGN[id] + 2)}</text><text y="34" text-anchor="middle" class="pid-val">CV ${fmt(id === 'lc' ? 100 : v.cv, 1)} %</text></g>`;
-      g += `<line x1="${cx + 12}" y1="${yM}" x2="${W - 40}" y2="${yM}" class="pid-pipe" marker-end="url(#pid-ar)"/><text x="${W - 150}" y="${yM - 18}" class="pid-lab">Ducto salida</text>`;
+      g += `<line x1="${cx + 12}" y1="${yM}" x2="${W - 40}" y2="${yM}" class="pid-pipe" marker-end="url(#pid-ar)"/><text x="${W - 110}" y="${yM - 18}" class="pid-lab">Ducto salida</text>`;
       g += val(cx + 120, yM + 52, id === 'lc' ? (CUST ? `${TN}_PT_${TAGN.lc + 3}` : 'LC_PT_1203') : tag(id, 'PT', 6), fmt(id === 'lc' ? Math.max(0, v.pin - 2.3) : v.pout), 'kg/cm²');
       if (mains.length) g += `<g transform="translate(${cx + 90} ${yM - 80})"><rect x="-44" y="-16" width="88" height="34" rx="4" class="pid-dra ${sim.stationDraActive(st) ? 'on' : ''}"/><text y="-2" text-anchor="middle" class="pid-tag">DRA</text><text y="12" text-anchor="middle" class="pid-val">${sim.stationDraActive(st) ? fmt(sim.stationDraLph(st), 0) + ' L/h' : 'off'}</text></g><line x1="${cx + 90}" y1="${yM - 62}" x2="${cx + 90}" y2="${yM - 4}" class="pid-pipe thin dash"/>`;
       g += '</svg>';
 
       let h = `<div class="pid-top"><div class="pid-sel">${ST.map((x) => `<button type="button" data-st="${x}" class="${x === id ? 'on' : ''}">${sim.stationById(x).shortName}</button>`).join('')}</div><div class="pid-title">${NAME[id]} <span>PK ${st.pkKm} · cota ${Math.round(app.geo.elevAt(st.pkKm)).toLocaleString('es-AR')} m</span></div></div>`;
       h += `<div class="pid-wrap">${g}</div>`;
-      if (equip && equip.summary(id)) h += `<div class="pid-links"><button type="button" class="sc-link" data-goeq="${id}">Ver equipos de ${esc(st.shortName)}: filtros, electricidad 33/6 kV, lubricación, cojinetes, variadores</button>${mains.length ? '<span>Las válvulas de descarga (MOV) se operan tocándolas: cerrar antes de arrancar, abrir con la bomba en marcha.</span>' : ''}</div>`;
+      if (equip && equip.summary(id)) h += `<div class="pid-links"><button type="button" class="sc-link" data-goeq="${id}">Ver equipos de ${esc(st.shortName)}: filtros, electricidad 33/6 kV, lubricación, cojinetes, variadores</button>${mains.length ? '<span>Todas las válvulas motorizadas se operan desde acá: entrada y salida de estación, aspiración y descarga de cada bomba. Para arrancar: aspiración abierta, descarga cerrada, arranque y apertura de la descarga.</span>' : ''}</div>`;
       if (mains.length) {
         const spT = st.pDescSpTarget != null ? st.pDescSpTarget : st.pDescSpKgCm2;
         const draOn = sim.stationDraActive(st);
         h += `<div class="pid-ctl"><div class="pid-ctl-g"><b>Lazo PID de descarga</b><span>PV ${fmt(id === 'ph' ? v.pout : v.pout)} kg/cm² · SP ${fmt(st.pDescSpKgCm2)}${st.pDescSpTarget != null ? ' → ' + fmt(st.pDescSpTarget) + ' (rampa 3 kg/cm²/min)' : ''}</span><label>Nuevo SP <input type="number" id="pid-sp" min="5" max="${MAOP}" step="0.5" value="${fmt(spT)}"> kg/cm²</label><button type="button" class="sc-btn exec" data-pidapply="sp">Aplicar SP</button></div>`;
         h += `<div class="pid-ctl-g"><b>DRA (reductor de fricción)</b><span>${draOn ? fmt(sim.stationDraLph(st), 0) + ' L/h · menos fricción aguas abajo' : 'apagado'}</span><label><input type="checkbox" id="pid-dra" ${draOn ? 'checked' : ''}> Inyectar</label><label>Dosis <input type="number" id="pid-lph" min="0" max="10" step="1" value="${fmt(sim.stationDraLph(st), 0)}"> L/h</label><button type="button" class="sc-btn exec" data-pidapply="dra">Aplicar DRA</button></div>`;
-        if (id === 'ph') h += `<div class="pid-ctl-g"><b>Caudal de cabecera</b><span>${fmt(S().segmentFlows.ph, 0)} m³/h · SP ${fmt(S().flowTarget != null ? S().flowTarget : S().globalFlowSetpoint, 0)}${S().flowTarget != null ? ' (en rampa)' : ''} · máx. ${QMAX}</span><label>Nuevo SP <input type="number" id="pid-q" min="0" max="${QMAX}" step="10" value="${fmt(S().flowTarget != null ? S().flowTarget : S().globalFlowSetpoint, 0)}"> m³/h</label><button type="button" class="sc-btn exec" data-pidapply="q">Aplicar en rampa</button></div>`;
+        if (id === 'ph') h += `<div class="pid-ctl-g"><b>Caudal de despacho (programa de bombeo)</b><span>Despacho ${fmt(dispQ(), 0)} m³/h · rampa ${RAMP} m³/h por minuto${S().flowTarget != null ? ' · subiendo, faltan ' + fmt(Math.abs(S().flowTarget - S().globalFlowSetpoint) / RAMP, 0) + ' min' : ''}</span></div><div class="pid-ctl-g"><b>Caudal de cabecera</b><span>${fmt(S().segmentFlows.ph, 0)} m³/h · SP ${fmt(S().flowTarget != null ? S().flowTarget : S().globalFlowSetpoint, 0)}${S().flowTarget != null ? ' (en rampa)' : ''} · máx. ${QMAX}</span><label>Nuevo SP <input type="number" id="pid-q" min="0" max="${QMAX}" step="10" value="${fmt(S().flowTarget != null ? S().flowTarget : S().globalFlowSetpoint, 0)}"> m³/h</label><button type="button" class="sc-btn exec" data-pidapply="q">Aplicar en rampa</button></div>`;
         h += `<p class="pid-ctl-note">Más caudal o menos DRA exigen más presión. Con el SP del PID limitás la presión sin tocar el caudal; si no alcanza, subí el DRA. Máximo del ducto: ${MAOP} kg/cm²; operación normal hasta ${OPMAX}.</p></div>`;
       }
       if (!mains.length && st.type === 'regulating') {
@@ -477,7 +498,7 @@
       if (!pend.length && !Object.keys(s.failedStations).length) h += '<p class="me-empty">Todas las estaciones en servicio.</p>';
       else {
         h += '<div class="ev-rearm">' + ST.filter((id) => s.failedStations[id] || ev.elec[id]).map((id) => {
-          const e = ev.elec[id] || { cause: 'Falla', ready: true };
+          const e = ev.elec[id] || { cause: (S().tripCause || {})[id] || 'Falla', ready: true };
           const perm = equip ? equip.stationPermissives(id) : [];
           const okAll = perm.every((x) => x[1]);
           return `<div class="ev-rc"><b>${sim.stationById(id).shortName}</b><span>${esc(e.cause)}</span><em>${e.ready ? (okAll ? 'Listo para rearme' : 'Faltan permisivos') : 'Esperando normalización…'}</em>${perm.length ? `<div class="eq-perm">${perm.map(([t, ok]) => `<span class="${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'} ${esc(t)}</span>`).join('')}</div><div class="me-btns"><button type="button" class="sc-btn" data-closeall="${id}">Cerrar todas las descargas</button>${ev.esd[id] ? `<button type="button" class="sc-btn" data-esdreset="${id}">Reponer paro de emergencia</button>` : ''}</div>` : ''}<button type="button" class="sc-btn exec" data-rearm="${id}" ${e.ready && okAll ? '' : 'disabled'}>Rearmar</button></div>`;
@@ -548,7 +569,7 @@
         const k = pa.dataset.pidapply;
         if (k === 'sp') { const v2 = Number($('pid-sp').value); if (isFinite(v2)) { sim.setStationPidSp(stSel, v2); app.toast(`SP del PID ${sim.stationById(stSel).shortName} → ${Math.min(MAOP, v2)} kg/cm² en rampa`); } }
         if (k === 'dra') { sim.setStationDraInject(stSel, $('pid-dra').checked); sim.setStationDraLph(stSel, Number($('pid-lph').value)); app.toast('DRA actualizado'); }
-        if (k === 'q') { const q = Number($('pid-q').value); if (isFinite(q)) { sim.rampFlowTo(q); app.toast(`Caudal ${HN} → ${Math.min(QMAX, q)} m³/h en rampa`); } }
+        if (k === 'q') { const q = Number($('pid-q').value); if (isFinite(q)) { S().dispatchQ = Math.min(QMAX, Math.max(0, q)); sim.rampFlowTo(q); evLog(`Despacho: nuevo caudal programado ${fmt(S().dispatchQ, 0)} m³/h`); app.toast(`Despacho ${HN} → ${Math.min(QMAX, q)} m³/h en rampa`); } }
         render(true); return;
       }
       if (equip && sub === 'equipos') { const tq = e.target.closest(equip.selector); if (tq && equip.click(tq)) { render(true); return; } }
@@ -563,6 +584,12 @@
         render(true); return;
       }
       if (sub === 'estacion' && equip) {
+        const sv = e.target.closest('[data-stv],[data-suc]');
+        if (sv) {
+          if (sv.dataset.stv) { const w = sv.dataset.stv, pos = equip.stValvePos(stSel, w), open = !(pos > 0.5); pending = { stv: w, open, label: `${open ? 'abrir' : 'cerrar'} MOV de ${w === 'in' ? 'entrada' : 'salida'} de ${sim.stationById(stSel).shortName}` }; }
+          else { const p = sim.stationById(stSel).pumps.find((x) => x.id === sv.dataset.suc), pos = equip.sucPos(stSel, p.id), open = !(pos > 0.5); pending = { suc: p.id, open, label: `${open ? 'abrir' : 'cerrar'} válvula de aspiración de ${p.name}` }; }
+          render(true); return;
+        }
         const mv = e.target.closest('[data-mov]');
         if (mv) {
           const p = sim.stationById(stSel).pumps.find((x) => x.id === mv.dataset.mov);
@@ -589,6 +616,8 @@
         pending = { pump: p.id, on: !p.online, label: `${p.online ? 'parar' : 'arrancar'} ${p.name}` };
         render(true); return;
       }
+      if (d.exec && pending && pending.stv) { equip.setStValve(stSel, pending.stv, pending.open); app.toast('Comando ejecutado: ' + pending.label + ' (carrera 1 min)'); pending = null; render(true); return; }
+      if (d.exec && pending && pending.suc) { equip.setSuc(stSel, pending.suc, pending.open); app.toast('Comando ejecutado: ' + pending.label); pending = null; render(true); return; }
       if (d.exec && pending && pending.mov) { equip.setMov(stSel, pending.mov, pending.open); app.toast('Comando ejecutado: ' + pending.label); pending = null; render(true); return; }
       if (d.exec && pending) { if (pending.on && equip) { equip.markManualStart(stSel, pending.pump); evLog(`${sim.stationById(stSel).shortName}: arranque con descarga cerrada; abrir la MOV con la bomba en marcha`); } pendingPerm = null; sim.setPump(stSel, pending.pump, pending.on); app.toast('Comando ejecutado: ' + pending.label); evLog(`${sim.stationById(stSel).shortName}: ${pending.label}`); pending = null; render(true); return; }
       if (d.cancel) { pending = null; pendingPerm = null; render(true); return; }
@@ -623,6 +652,7 @@
     const ext = global.createIngExt ? global.createIngExt(app, { meters, qInd, evLog, setSub: (k) => setSub(k) }) : null;
     const equip = global.createEquip ? global.createEquip(app, { TAGN, NAME, ev, evLog }) : null;
     if (equip && app.alarms && app.alarms.addSource) app.alarms.addSource(() => equip.alarms());
+    if (equip) equip.onStart = (sid, p) => { if (S().stationRamp && S().stationRamp.__init) return; startRamp(`arranque de ${p.name} en ${sim.stationById(sid).shortName}`); };
     const faults = global.createFaults ? global.createFaults(app, { ev, evLog, equip: () => equip }) : null;
     nav();
     setSub('principal');

@@ -97,8 +97,12 @@
         run: (pk) => { const sp = S().globalFlowSetpoint; sim.startRuptureAtPk(Number(pk), 0.18); S().globalFlowSetpoint = sp; } },
       { k: 'rotura', g: 'Integridad', t: 'Rotura del ducto', where: 'pk', d: 'Rotura con derrame importante.', c: 'Caída brusca de presión cerca del PK, pérdida de caudal en el recibo y derrame.', sup: ['Parar el bombeo en toda la línea', 'Cerrar las VB a ambos lados de la rotura', 'Activar el plan de contingencia y avisar a las autoridades', 'Seguir la caída de linepack', 'Rearrancar solo con OK de integridad'],
         run: (pk) => sim.startRuptureAtPk(Number(pk), 0.75) },
-      { k: 'vb', g: 'Integridad', t: 'Cierre inadvertido de válvula de bloqueo', where: 'valve', d: 'Una VB de línea se cierra sin orden (falla del actuador).', c: 'Se corta el caudal aguas abajo y sube la presión aguas arriba de la válvula.', sup: ['Identificar la VB cerrada en Principal o Integridad', 'Parar las bombas aguas arriba para no superar la MAOP', 'Reabrir la válvula y verificar su posición', 'Volver a bombear en rampa'],
+      { k: 'vb', g: 'Integridad', t: 'Cierre inadvertido de válvula de bloqueo', where: 'valve', d: 'Una VB de línea se cierra sin orden (falla del actuador).', c: 'Se corta el caudal: aguas abajo se despresuriza y aguas arriba la presión sube hasta el cierre de las bombas. Actúa el PSHH (disparo) y, si falla, la PSV alivia a 95 kg/cm².', sup: ['Identificar la VB cerrada en Principal o Integridad', 'Parar las bombas aguas arriba antes del disparo por PSHH', 'Reabrir la válvula y verificar su posición', 'Rearmar las estaciones disparadas y volver a bombear en rampa'],
         run: (vid) => sim.setValve(vid, false) },
+      { k: 'movout', g: 'Integridad', t: 'Cierre de la MOV de salida de una estación', where: 'station', d: 'La válvula motorizada de salida de la estación se cierra con las bombas en marcha.', c: 'Las bombas empujan contra la válvula cerrada: la presión de descarga sube unos 4 kg/cm² por minuto hasta el disparo PSHH; aguas abajo cae el caudal a cero.', sup: ['Detectar la subida de presión y la alarma de línea bloqueada', 'Parar las bombas de la estación antes del disparo', 'Verificar en el P&ID la posición de la MOV de salida', 'Abrir la MOV y volver a arrancar con la secuencia normal'],
+        run: (id) => { const e = eq(); if (e) e.setStValve(id, 'out', false); } },
+      { k: 'pshh', g: 'Integridad', t: 'Presostato de alta inhibido (falla de protección)', where: 'station', d: 'El PSHH de la estación queda inhibido: no dispara las bombas por alta presión.', c: 'Ante un bloqueo, la presión sigue subiendo hasta que abre la PSV a 95 kg/cm² y alivia crudo al tanque de alivio.', sup: ['Ver la protección inhibida en el anunciador', 'Restituir la protección antes de seguir operando', 'Si hay bloqueo, parar las bombas a mano', 'Registrar la inhibición y su autorización'],
+        run: (id) => { st(id)._pshhInhibit = true; } },
       { k: 'surge', g: 'Integridad', t: 'Golpe de ariete', where: 'line', d: 'Una parada brusca genera una onda de sobrepresión.', c: 'Varias estaciones se acercan al 90 % de la MAOP.', sup: ['Bajar caudal en rampa', 'No arrancar ni cerrar válvulas rápido', 'Esperar que se amortigüe la onda', 'Verificar MAOP por tramo en Integridad'],
         run: () => sim.applyScenario('sobrepresion_surge') },
       { k: 'altap', g: 'Integridad', t: 'Alta presión de descarga (falla del PID)', where: 'station', d: 'El lazo PID de descarga falla con la válvula de control abierta.', c: 'La presión de descarga sube hasta el límite del ducto y actúa el disparo por MAOP.', sup: ['Ver el PID en el P&ID de la estación', 'Pasar el lazo a manual y bajar el set point', 'Bajar caudal si la presión no baja', 'Verificar la presión máxima del tramo'],
@@ -162,6 +166,8 @@
       const e = eq();
       if (c.k === 'altap') { S().scenarioActive = null; const x = st(a.loc); x.pDescSpKgCm2 = x._spFault != null ? x._spFault : Math.min(x.pDescSpKgCm2, 80); delete x._spFault; }
       if (c.k === 'vb') sim.setValve(a.loc, true);
+      if (c.k === 'movout' && e) e.setStValve(a.loc, 'out', true);
+      if (c.k === 'pshh') st(a.loc)._pshhInhibit = false;
       if (c.k === 'com') delete ev.comm[a.loc];
       if (c.k === 'n2') delete ev.n2[a.loc];
       if (c.k === 'xs' && e) e.state[a.loc].trap.sensorFault = false;

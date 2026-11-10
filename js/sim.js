@@ -675,6 +675,117 @@
       return seg ? Number(seg.maopKgCm2) || 90 : 90;
     }
 
+    // ---- v11: línea bloqueada (válvula cerrada) → sin caudal, la presión sube hasta el cierre de bombas;
+    // protecciones: PSHH dispara la estación (por defecto en la MAOP) y la PSV alivia (por defecto 95 kg/cm²).
+    function psvFor(st, prevId) {
+      if (st && st.psvSetKgCm2 != null) return Number(st.psvSetKgCm2);
+      if (thr().psvSetKgCm2 != null) return Number(thr().psvSetKgCm2);
+      const m = prevId ? maopForStations(prevId, st.id) : 90;
+      return Math.round(m * 1.055);
+    }
+    function pshhFor(st, prevId, nextId) {
+      if (st && st.pshhKgCm2 != null) return Number(st.pshhKgCm2);
+      if (thr().pshhKgCm2 != null) return Number(thr().pshhKgCm2);
+      return nextId ? maopForStations(st.id, nextId) : (prevId ? maopForStations(prevId, st.id) : 90);
+    }
+    function applyBlockage(sorted) {
+      const now = state.timeSec || 0;
+      const dtMin = Math.max(0, Math.min(5, (now - (state._blkT != null ? state._blkT : now)) / 60));
+      state._blkT = now;
+      state.relief = state.relief || {};
+      state.tripCause = state.tripCause || {};
+      const P = state._blkP || (state._blkP = {});
+      let bIdx = -1, bMode = null, bWhy = '';
+      for (let i = 0; i < sorted.length; i++) {
+        const st = sorted[i];
+        if (i > 0) { const v = closedValveBlocking(sorted[i - 1].pkKm || 0, st.pkKm || 0); if (v) { bIdx = i; bMode = 'line'; bWhy = v.name || v.id; break; } }
+        if (st._blockAt) { bIdx = i; bMode = st._blockAt; bWhy = st._blockWhy || ''; break; }
+      }
+      const relieve = (st, idx, p, cap) => {
+        const r = state.relief[st.id] || (state.relief[st.id] = { open: false, volM3: 0, qM3h: 0, sp: cap });
+        r.sp = cap;
+        if (p > cap) {
+          if (!r.open) logEvent(`PSV ${st.shortName || st.id} abierta a ${cap} kg/cm²: alivio al tanque de alivio`, 'alarm');
+          r.open = true; r.qM3h = Math.max(60, (state.globalFlowSetpoint || 600) * 0.3); r.volM3 += r.qM3h * dtMin / 60;
+          return cap;
+        }
+        if (r.open && p < cap - 3) { r.open = false; r.qM3h = 0; logEvent(`PSV ${st.shortName || st.id} reasentada`, 'ops'); }
+        return p;
+      };
+      if (bIdx < 0) {
+        state.blockage = null;
+        for (const k in P) delete P[k];
+        // alivio por transitorio (golpe de ariete) sin bloqueo
+        for (let i = 0; i < sorted.length; i++) {
+          const st = sorted[i];
+          if (!st.pumps || !st.pumps.length) continue;
+          const po = state.pressuresOut[st.id];
+          if (po == null) continue;
+          const cap = psvFor(st, i > 0 ? sorted[i - 1].id : null);
+          const p2 = relieve(st, i, po, cap);
+          if (p2 !== po) { state.pressuresOut[st.id] = p2; if (i === 0) state.pressures[st.id] = p2; }
+        }
+        return;
+      }
+      state.blockage = { idx: bIdx, mode: bMode, stationId: sorted[bIdx].id, why: bWhy, since: (state.blockage && state.blockage.stationId === sorted[bIdx].id && state.blockage.mode === bMode) ? state.blockage.since : now };
+      const tIn = {}, tOut = {};
+      let pl = 0;
+      for (const st of sorted) if (!P[st.id]) P[st.id] = { in: state.pressuresIn[st.id] || 0, out: state.pressuresOut[st.id] || 0 };
+      for (let i = 0; i < sorted.length; i++) {
+        const st = sorted[i];
+        const upstream = i < bIdx || (i === bIdx && bMode !== 'line');
+        let pin;
+        if (i === 0) pin = 1.5;
+        else pin = pl - elevLossAlong(sorted[i - 1].pkKm || 0, st.pkKm || 0);
+        if (upstream) {
+          let boost = 0;
+          const running = st.pumps && st.pumps.length && !state.failedStations[st.id] && !(i === 0 && state.phFailed);
+          if (running && !(i === bIdx && bMode === 'before')) boost = pumpBoostKg(st) * 1.15; // presión de cierre (caudal cero)
+          // tramo empaquetado: con las bombas paradas, la retención aguas arriba mantiene la presión atrapada
+          if (!boost && P[st.id].out > pin) pin = Math.max(pin, P[st.id].out - 0.1 * dtMin);
+          tIn[st.id] = Math.max(0, Math.min(pin, i > 0 ? pl - elevLossAlong(sorted[i - 1].pkKm || 0, st.pkKm || 0) + 0.001 : pin));
+          tOut[st.id] = i === bIdx && bMode === 'before' ? Math.max(0, pin) : Math.max(0, pin + boost);
+          if (i > 0 && !boost && P[st.id].in > tIn[st.id]) tIn[st.id] = Math.max(tIn[st.id], P[st.id].in - 0.1 * dtMin);
+          pl = tOut[st.id];
+        } else {
+          // aguas abajo del bloqueo: se despresuriza hasta la columna estática
+          const elev0 = sorted[0].elevationMsnm || 0;
+          const dz = (st.elevationMsnm || 0) - elev0;
+          const pH = Math.max(0.3, 4 - elevLossKg(Math.max(0, dz)) * 0.12);
+          tIn[st.id] = pH; tOut[st.id] = pH;
+        }
+      }
+      for (let i = 0; i < sorted.length; i++) {
+        const st = sorted[i];
+        const c = P[st.id] || (P[st.id] = { in: state.pressuresIn[st.id] || 0, out: state.pressuresOut[st.id] || 0 });
+        const step = (cur, tgt) => (tgt > cur ? Math.min(tgt, cur + 4 * dtMin) : Math.max(tgt, cur - 3 * dtMin));
+        c.in = step(c.in, tIn[st.id]);
+        c.out = step(c.out, tOut[st.id]);
+        const upstream = i < bIdx || (i === bIdx && bMode !== 'line');
+        if (upstream && st.pumps && st.pumps.length) {
+          const prevId = i > 0 ? sorted[i - 1].id : null, nextId = i < sorted.length - 1 ? sorted[i + 1].id : null;
+          const pshh = pshhFor(st, prevId, nextId);
+          const pAm = st.pAspMinKgCm2 != null ? Number(st.pAspMinKgCm2) : 2;
+          if (i > 0 && c.in < pAm - 0.5 && !state.failedStations[st.id] && (st.pumps || []).some((p) => p.online && !isBoosterRole(p.role))) {
+            state.tripCause[st.id] = `Disparo por baja presión de aspiración (${c.in.toFixed(1)} kg/cm²)`;
+            logEvent(`TRIP P_asp ${st.shortName || st.id}: ${c.in.toFixed(1)} kg/cm² con la línea bloqueada`, 'alarm');
+            failStation(st.id);
+          }
+          if (!st._pshhInhibit && c.out >= pshh && !state.failedStations[st.id] && (st.pumps || []).some((p) => p.online)) {
+            state.tripCause[st.id] = `Disparo por alta presión de descarga (PSHH ${pshh} kg/cm²)`;
+            logEvent(`TRIP PSHH ${st.shortName || st.id}: ${c.out.toFixed(1)} ≥ ${pshh} kg/cm² con la línea bloqueada (${bWhy})`, 'alarm');
+            failStation(st.id);
+          }
+          c.out = relieve(st, i, c.out, psvFor(st, prevId));
+        }
+        state.pressuresIn[st.id] = c.in;
+        state.pressuresOut[st.id] = c.out;
+        state.pressures[st.id] = i === 0 ? c.out : c.in;
+        state.hgl[st.id] = (st.elevationMsnm || 0) + (c.out * KGCM2_PA) / (density() * G);
+        state.segmentFlows[st.id] = 0;
+      }
+    }
+
     function closedValveBlocking(pkA, pkB) {
       for (const v of state.valves) {
         if (v.open) continue;
@@ -1002,6 +1113,7 @@
           state.hgl[st.id] = (st.elevationMsnm || 0) + (pHydro * KGCM2_PA) / (rho * G);
           state.segmentFlows[st.id] = 0;
         }
+        applyBlockage(sorted);
         state.lineFlow = 0;
         updateLinepack();
         return { flow: 0, pressures: state.pressures, hgl: state.hgl };
@@ -1236,6 +1348,7 @@
           }
         }
       }
+      applyBlockage(sorted);
       const lc = stationById('lc');
       if (lc && (lc.pkKm || lengthKm()) > maxPk + 0.5) qAtLc = 0;
       // line flow = flow at farthest pressurized reachable station
@@ -2644,6 +2757,7 @@
     function clearStationFail(id) {
       delete state.failedStations[id];
       delete state.tripFlags[id];
+      if (state.tripCause) delete state.tripCause[id];
       const st = stationById(id);
       if (st && st.pumps) for (const p of st.pumps) p.online = true;
       if (id === 'ph') {

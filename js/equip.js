@@ -27,6 +27,10 @@
     const PUMP_ST = sorted.filter((x) => x.pumps && x.pumps.some((p) => !isBooster(p))).map((x) => x.id);
     const TRAP_ST = sorted.filter((x) => x.pigTrap).map((x) => x.id);
     const EQ_ST = sorted.filter((x) => PUMP_ST.includes(x.id) || TRAP_ST.includes(x.id)).map((x) => x.id);
+    // válvulas motorizadas de entrada y salida de estación (operables desde el SCADA)
+    const SV_ST = sorted.filter((x) => PUMP_ST.includes(x.id) || x.id === 'lc' || x.type === 'regulating').map((x) => x.id);
+    const SV = {};
+    for (const id of SV_ST) SV[id] = { in: { pos: 1, target: 1 }, out: { pos: 1, target: 1 } };
     const sn = (id) => (st(id) || {}).shortName || id;
     const hhmm = () => { const d = S().simDate; return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
 
@@ -54,7 +58,7 @@
       for (const p of mains) {
         E[id].pumps[p.id] = {
           oilP: p.online ? 2.2 : 1.6, oilT: 42, level: 82 + Math.random() * 10, lubeFault: false, aux: 'A',
-          mov: { pos: p.online ? 1 : 0, target: p.online ? 1 : 0 }, prevOn: !!p.online, manualStart: false, deadT: 0, sealLeak: false,
+          mov: { pos: p.online ? 1 : 0, target: p.online ? 1 : 0 }, suc: { pos: 1, target: 1 }, sucT: 0, prevOn: !!p.online, manualStart: false, deadT: 0, sealLeak: false,
           brg: { pDE: 40, pNDE: 38, mDE: 42, mNDE: 40 }, vib: 2, heat: 0, vibFault: 0,
           vfdFault: false, kw: 0, amp: 0, r: 0, head: 0, hours: 12000 + Math.round(Math.random() * 30000),
         };
@@ -73,6 +77,20 @@
       const dtH = lastT == null ? 0 : Math.max(0, Math.min(0.5, (t - lastT) / 3600));
       lastT = t;
       const ev = ctx.ev;
+      // carrera de las MOV de estación (1 min) y bloqueo de la línea
+      for (const id of SV_ST) {
+        const v = SV[id], x = st(id);
+        for (const w of ['in', 'out']) { const m = v[w]; const stp = dtH / 0.0167; m.pos = m.target > m.pos ? Math.min(m.target, m.pos + stp) : Math.max(m.target, m.pos - stp); }
+        let at = null, why = '';
+        if (v.in.pos < 0.05) { at = 'before'; why = `MOV de entrada de ${sn(id)} cerrada`; }
+        else if (v.out.pos < 0.05) { at = 'after'; why = `MOV de salida de ${sn(id)} cerrada`; }
+        else if (E[id] && PUMP_ST.includes(id)) {
+          const failedX = !!s.failedStations[id] || (id === 'ph' && s.phFailed);
+          const runM = (x.pumps || []).filter((p) => !isBooster(p) && p.online && !failedX);
+          if (runM.length && runM.every((p) => E[id].pumps[p.id] && (E[id].pumps[p.id].mov.pos < 0.05 || E[id].pumps[p.id].suc.pos < 0.05))) { at = 'before'; why = `válvulas de las bombas en marcha cerradas en ${sn(id)}`; }
+        }
+        x._blockAt = at; x._blockWhy = why;
+      }
       for (const id of EQ_ST) {
         const e = E[id];
         const x = st(id);
@@ -155,13 +173,19 @@
           if (trip) { sim.setPump(id, p.id, false); ctx.evLog(`${sn(id)}: disparo de ${p.name} por ${trip}`); }
           // válvula de descarga actuada (MOV): carrera completa en ~1 min
           const mv = k.mov;
-          if (on && !k.prevOn) { if (!k.manualStart) mv.target = 1; k.manualStart = false; }
+          if (on && !k.prevOn) { if (!k.manualStart) mv.target = 1; k.manualStart = false; if (api.onStart && lastT != null && dtH > 0) api.onStart(id, p); }
           if (!on && k.prevOn && mv.pos > 0.05) ctx.evLog(`${sn(id)}: ${p.name} parada con la válvula de descarga abierta · cerrar MOV`);
           k.prevOn = on;
           const stepMv = dtH / 0.0167;
           mv.pos = mv.target > mv.pos ? Math.min(mv.target, mv.pos + stepMv) : Math.max(mv.target, mv.pos - stepMv);
-          p.powerFraction = on ? Math.max(0, Math.min(1, mv.pos)) : 1;
-          if (on && mv.pos < 0.1 && Q > 0) { k.deadT += dtH; if (k.deadT > 0.05) k.heat = Math.max(k.heat, 0.5); } else k.deadT = 0;
+          const sv = k.suc;
+          sv.pos = sv.target > sv.pos ? Math.min(sv.target, sv.pos + stepMv) : Math.max(sv.target, sv.pos - stepMv);
+          p.powerFraction = on ? Math.max(0, Math.min(1, mv.pos, sv.pos)) : 1;
+          if (on && mv.pos < 0.1) { k.deadT += dtH; if (k.deadT > 0.05) k.heat = Math.max(k.heat, 0.5); } else k.deadT = 0;
+          // aspiración cerrada con la bomba en marcha: cavita y dispara por baja presión de aspiración (~20 s)
+          if (on && sv.pos < 0.1) { k.sucT += dtH; if (k.sucT > 0.0055) { k.sucT = 0; sim.setPump(id, p.id, false); ctx.evLog(`${sn(id)}: disparo de ${p.name} por baja presión de aspiración (válvula de aspiración cerrada)`); } } else k.sucT = 0;
+          // presión en la carcasa de la bomba: con la descarga cerrada sube a la presión de cierre
+          k.pCase = on ? (mv.pos < 0.1 ? (s.pressuresIn[id] || 0) + Hb * 1.15 * Math.max(0.05, sv.pos) : Math.max(s.pressuresOut[id] || 0, (s.pressuresIn[id] || 0))) : (s.pressuresIn[id] || 0) * Math.max(0, sv.pos);
           // variador
           k.hz = on && p.drive === 'variador' ? Math.min(50, 38 + 12 * Math.min(1, load)) : 0;
           k.rpm = on ? (p.drive === 'variador' ? k.hz * 59.6 : p.drive === 'turbina' ? 4300 + 500 * Math.min(1, load) : 2980) : 0;
@@ -193,6 +217,15 @@
     function alarms() {
       const out = [];
       const s = S();
+      for (const id of SV_ST) {
+        const v = SV[id], tg = sn(id);
+        if (v.in.pos < 0.95) out.push({ id: `eq-svin-${id}`, severity: v.in.pos < 0.05 ? 'critical' : 'warn', text: `${tg}: MOV de entrada de estación ${v.in.pos < 0.05 ? 'cerrada' : 'en movimiento ' + fmt(v.in.pos * 100, 0) + ' %'}`, tag: tg });
+        if (v.out.pos < 0.95) out.push({ id: `eq-svout-${id}`, severity: v.out.pos < 0.05 ? 'critical' : 'warn', text: `${tg}: MOV de salida de estación ${v.out.pos < 0.05 ? 'cerrada' : 'en movimiento ' + fmt(v.out.pos * 100, 0) + ' %'}`, tag: tg });
+        const rl = (s.relief || {})[id];
+        if (rl && rl.open) out.push({ id: `eq-psv-${id}`, severity: 'critical', text: `${tg}: PSV abierta a ${rl.sp} kg/cm² · alivio ${fmt(rl.qM3h, 0)} m³/h al tanque de alivio`, tag: tg });
+        if (st(id)._pshhInhibit) out.push({ id: `eq-pshhinh-${id}`, severity: 'warn', text: `${tg}: protección PSHH inhibida`, tag: tg });
+      }
+      if (s.blockage) { const b = s.blockage; out.push({ id: 'eq-block', severity: 'critical', text: `Línea bloqueada (${b.why}): sin caudal, la presión aguas arriba sube`, tag: sn(b.stationId) }); }
       for (const id of EQ_ST) {
         const e = E[id], x = st(id), tg = sn(id);
         const failed = !!s.failedStations[id] || (id === 'ph' && s.phFailed);
@@ -212,6 +245,7 @@
           if (!on && k.mov.pos > 0.05) out.push({ id: `eq-movo-${p.id}`, severity: 'warn', text: `${tg}: ${p.name} parada con válvula de descarga abierta (${fmt(k.mov.pos * 100, 0)} %)`, tag: tg });
           if (on && k.mov.pos < 0.1 && k.deadT > 0.02) out.push({ id: `eq-dead-${p.id}`, severity: 'critical', text: `${tg}: ${p.name} en marcha con la descarga cerrada`, tag: tg });
           if (k.sealLeak) out.push({ id: `eq-seal-${p.id}`, severity: 'critical', text: `${tg}: pérdida por sello mecánico en ${p.name}`, tag: tg });
+          if (on && k.suc.pos < 0.95) out.push({ id: `eq-suc-${p.id}`, severity: 'critical', text: `${tg}: ${p.name} en marcha con la aspiración cerrada (${fmt(k.suc.pos * 100, 0)} %)`, tag: tg });
           if (k.vfdFault) out.push({ id: `eq-vfd-${p.id}`, severity: 'critical', text: `${tg}: falla de variador de ${p.name}`, tag: tg });
           if (on && (k.offT || 0) > 0.1) out.push({ id: `eq-curve-${p.id}`, severity: 'warn', text: `${tg}: ${p.name} fuera de curva (${fmt(k.r * 100, 0)} % del BEP)`, tag: tg });
         }
@@ -298,16 +332,20 @@
       if (!mains.length) return '';
       if (!pumpSel || !mains.some((p) => p.id === pumpSel)) pumpSel = (mains.find((p) => p.online) || mains[0]).id;
       const t = (v, w, a) => `<td class="r mono ${v >= a ? 'bad' : v >= w ? 'warn' : ''}">${fmt(v, 0)}</td>`;
-      let h = `<div class="eq-card eq-wide"><h3 class="sc-h3">Bombas principales · lubricación, cojinetes y vibración <span>tocá una fila para ver su curva</span></h3><div class="me-tablewrap"><table class="me-table"><thead><tr><th>Bomba</th><th>Estado</th><th class="r">Carga</th><th class="r">% BEP</th><th class="r">Coj. LA bomba °C</th><th class="r">Coj. LOA bomba °C</th><th class="r">Coj. LA motor °C</th><th class="r">Coj. LOA motor °C</th><th class="r">Vibración mm/s</th><th class="r">Aceite bar</th><th class="r">Aceite °C</th><th class="r">Nivel %</th><th class="r">Descarga MOV</th><th class="r">Horas</th></tr></thead><tbody>`;
+      let h = `<div class="eq-card eq-wide"><h3 class="sc-h3">Bombas principales · lubricación, cojinetes y vibración <span>tocá una fila para ver su curva</span></h3><div class="me-tablewrap"><table class="me-table"><thead><tr><th>Bomba</th><th>Estado</th><th class="r">Carga</th><th class="r">% BEP</th><th class="r">Coj. LA bomba °C</th><th class="r">Coj. LOA bomba °C</th><th class="r">Coj. LA motor °C</th><th class="r">Coj. LOA motor °C</th><th class="r">Vibración mm/s</th><th class="r">Aceite bar</th><th class="r">Aceite °C</th><th class="r">Nivel %</th><th class="r">Aspiración MOV</th><th class="r">Descarga MOV</th><th class="r">Horas</th></tr></thead><tbody>`;
       for (const p of mains) {
         const k = e.pumps[p.id];
         const on = k.rpm > 0;
         const rc = !on ? '' : k.r < LIM.aorLo || k.r > LIM.aorHi ? 'bad' : k.r < LIM.porLo || k.r > LIM.porHi ? 'warn' : '';
-        h += `<tr class="${p.id === pumpSel ? 'sel' : ''}" data-eqpump="${p.id}" style="cursor:pointer"><td><b>${esc(p.name)}</b>${p.reserve ? ' <span class="me-last">reserva</span>' : ''}</td><td>${on ? 'En marcha' : 'Parada'}${k.lubeFault ? ' · <span class="me-warn">lubricación</span>' : ''}</td><td class="r mono">${on ? fmt(k.load * 100, 0) + ' %' : '—'}</td><td class="r mono ${rc}">${on ? fmt(k.r * 100, 0) : '—'}</td>${t(k.brg.pDE, LIM.brgWarn, LIM.brgTrip)}${t(k.brg.pNDE, LIM.brgWarn, LIM.brgTrip)}${t(k.brg.mDE, LIM.brgWarn, LIM.brgTrip)}${t(k.brg.mNDE, LIM.brgWarn, LIM.brgTrip)}<td class="r mono ${k.vib >= LIM.vibTrip ? 'bad' : k.vib >= LIM.vibWarn ? 'warn' : ''}">${fmt(k.vib, 1)}</td><td class="r mono ${k.oilP < LIM.oilTrip ? 'bad' : k.oilP < LIM.oilLow ? 'warn' : ''}">${fmt(k.oilP, 2)}</td><td class="r mono">${fmt(k.oilT, 0)}</td><td class="r mono">${fmt(k.level, 0)}</td><td class="r"><button type="button" class="sc-btn" data-mov="${p.id}" data-open="${k.mov.target > 0.5 ? 0 : 1}">${k.mov.pos > 0.95 ? 'Abierta' : k.mov.pos < 0.05 ? 'Cerrada' : fmt(k.mov.pos * 100, 0) + ' %'} · ${k.mov.target > 0.5 ? 'cerrar' : 'abrir'}</button></td><td class="r mono">${Math.round(k.hours).toLocaleString('es-AR')}</td></tr>`;
+        h += `<tr class="${p.id === pumpSel ? 'sel' : ''}" data-eqpump="${p.id}" style="cursor:pointer"><td><b>${esc(p.name)}</b>${p.reserve ? ' <span class="me-last">reserva</span>' : ''}</td><td>${on ? 'En marcha' : 'Parada'}${k.lubeFault ? ' · <span class="me-warn">lubricación</span>' : ''}</td><td class="r mono">${on ? fmt(k.load * 100, 0) + ' %' : '—'}</td><td class="r mono ${rc}">${on ? fmt(k.r * 100, 0) : '—'}</td>${t(k.brg.pDE, LIM.brgWarn, LIM.brgTrip)}${t(k.brg.pNDE, LIM.brgWarn, LIM.brgTrip)}${t(k.brg.mDE, LIM.brgWarn, LIM.brgTrip)}${t(k.brg.mNDE, LIM.brgWarn, LIM.brgTrip)}<td class="r mono ${k.vib >= LIM.vibTrip ? 'bad' : k.vib >= LIM.vibWarn ? 'warn' : ''}">${fmt(k.vib, 1)}</td><td class="r mono ${k.oilP < LIM.oilTrip ? 'bad' : k.oilP < LIM.oilLow ? 'warn' : ''}">${fmt(k.oilP, 2)}</td><td class="r mono">${fmt(k.oilT, 0)}</td><td class="r mono">${fmt(k.level, 0)}</td><td class="r"><button type="button" class="sc-btn" data-suc="${p.id}" data-open="${k.suc.target > 0.5 ? 0 : 1}">${k.suc.pos > 0.95 ? 'Abierta' : k.suc.pos < 0.05 ? 'Cerrada' : fmt(k.suc.pos * 100, 0) + ' %'} · ${k.suc.target > 0.5 ? 'cerrar' : 'abrir'}</button></td><td class="r"><button type="button" class="sc-btn" data-mov="${p.id}" data-open="${k.mov.target > 0.5 ? 0 : 1}">${k.mov.pos > 0.95 ? 'Abierta' : k.mov.pos < 0.05 ? 'Cerrada' : fmt(k.mov.pos * 100, 0) + ' %'} · ${k.mov.target > 0.5 ? 'cerrar' : 'abrir'}</button></td><td class="r mono">${Math.round(k.hours).toLocaleString('es-AR')}</td></tr>`;
       }
       h += `</tbody></table></div><p class="me-note">Alarma de cojinete ${LIM.brgWarn} °C y disparo ${LIM.brgTrip} °C · vibración ${LIM.vibWarn} / ${LIM.vibTrip} mm/s · aceite mínimo ${LIM.oilLow} bar, disparo ${LIM.oilTrip} bar. Con la bomba parada, la bomba auxiliar de la central mantiene la prelubricación.</p>`;
       const perm = pumpPermissives(id, pumpSel);
       h += `<div class="eq-perm"><b>Permisivos de arranque · ${esc(((x.pumps || []).find((q) => q.id === pumpSel) || {}).name || '')}</b>${perm.map(([t, ok]) => `<span class="${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'} ${esc(t)}</span>`).join('')}</div>`;
+      if (SV[id]) {
+        const v = SV[id], rl = (S().relief || {})[id] || {}, pos = (m) => m.pos > 0.95 ? 'abierta' : m.pos < 0.05 ? 'cerrada' : fmt(m.pos * 100, 0) + ' %';
+        h += `<div class="eq-perm"><b>Válvulas de estación y protecciones · ${esc(sn(id))}</b><span>MOV entrada: ${pos(v.in)} <button type="button" class="sc-btn" data-stv="in" data-open="${v.in.target > 0.5 ? 0 : 1}">${v.in.target > 0.5 ? 'cerrar' : 'abrir'}</button></span><span>MOV salida: ${pos(v.out)} <button type="button" class="sc-btn" data-stv="out" data-open="${v.out.target > 0.5 ? 0 : 1}">${v.out.target > 0.5 ? 'cerrar' : 'abrir'}</button></span><span class="${rl.open ? 'bad' : 'ok'}">PSV ${rl.sp || ''} kg/cm²: ${rl.open ? 'ABIERTA · ' + fmt(rl.volM3 || 0, 1) + ' m³ aliviados' : 'cerrada'}</span><span class="${x._pshhInhibit ? 'bad' : 'ok'}">PSHH: ${x._pshhInhibit ? 'INHIBIDA' : 'en servicio'}</span></div>`;
+      }
       h += `<div class="eq-curvewrap">${curveSvg(id, pumpSel)}<div class="eq-curvetxt">${curveText(id, pumpSel)}<div class="me-btns"><button type="button" class="sc-btn" data-eq="lube">Falla de central de lubricación</button><button type="button" class="sc-btn" data-eq="heat">Calentamiento de cojinete</button><button type="button" class="sc-btn" data-eq="vib">Desbalanceo (vibración)</button><button type="button" class="sc-btn exec" data-eq="fix">Reparar y normalizar</button></div></div></div></div>`;
       return h;
     }
@@ -375,6 +413,8 @@
       if (d.eqst) { sel = d.eqst; pumpSel = null; return true; }
       if (d.eqpump) { pumpSel = d.eqpump; return true; }
       if (d.mov) { setMov(sel, d.mov, d.open === '1'); return true; }
+      if (d.suc) { setSuc(sel, d.suc, d.open === '1'); return true; }
+      if (d.stv) { setStValve(sel, d.stv, d.open === '1'); return true; }
       const e = E[sel];
       if (!d.eq || !e) return false;
       const x = st(sel);
@@ -413,6 +453,7 @@
       out.push(['Estación rearmada (sin disparo ni paro de emergencia)', !(ctx.ev && ctx.ev.esd && ctx.ev.esd[id]) && !(elc && !elc.ready)]);
       out.push(['Presión de aceite de lubricación ≥ 1,2 bar', k.oilP >= LIM.oilLow && !k.lubeFault]);
       out.push(['Cojinetes y vibración sin disparo activo', !k.heat && !k.vibFault && Math.max(k.brg.pDE, k.brg.pNDE, k.brg.mDE, k.brg.mNDE) < LIM.brgWarn]);
+      out.push(['Válvula de aspiración abierta', k.suc.pos > 0.95]);
       out.push(['Válvula de descarga cerrada', k.mov.pos < 0.05]);
       if (id !== 'ph') out.push(['Presión de aspiración sobre el mínimo', (s.pressuresIn[id] || 0) >= Math.max(1, (x.pAspMinKgCm2 || 3) - 1)]);
       out.push(['Filtro de entrada sin oclusión', (e.dp || 0) < LIM.filtAlm]);
@@ -429,6 +470,7 @@
         ['Tensión de entrada 33 kV normalizada', hasTurbineOnly(x) || (e.elec.vIn >= LIM.vInLow && !(elc && !elc.ready))],
         ['Pulsador de paro de emergencia repuesto', !(ctx.ev && ctx.ev.esd && ctx.ev.esd[id])],
         ['Válvulas de descarga de las bombas cerradas', mains.every((p) => e.pumps[p.id].mov.pos < 0.05)],
+        ['MOV de entrada y salida de estación abiertas', !SV[id] || (SV[id].in.pos > 0.95 && SV[id].out.pos > 0.95)],
         ['Lubricación de las bombas en servicio', mains.every((p) => !e.pumps[p.id].lubeFault && e.pumps[p.id].oilP >= LIM.oilLow)],
         ['Filtro de entrada disponible', (e.dp || 0) < LIM.filtAlm || e.filters.some((f) => f.mode === 'reserva')],
         ['Sin pérdidas por sello', mains.every((p) => !e.pumps[p.id].sealLeak)],
@@ -436,6 +478,11 @@
     }
     function setMov(id, pid, open) { const k = E[id] && E[id].pumps[pid]; if (!k) return; k.mov.target = open ? 1 : 0; const p = (st(id).pumps || []).find((q) => q.id === pid); ctx.evLog(`${sn(id)}: ${open ? 'abrir' : 'cerrar'} válvula de descarga de ${p ? p.name : pid}`); }
     function closeAllMovs(id) { const e = E[id]; if (!e) return; Object.values(e.pumps).forEach((k) => { k.mov.target = 0; }); ctx.evLog(`${sn(id)}: cierre de todas las válvulas de descarga`); }
+    function setSuc(id, pid, open) { const k = E[id] && E[id].pumps[pid]; if (!k) return; k.suc.target = open ? 1 : 0; const p = (st(id).pumps || []).find((q) => q.id === pid); ctx.evLog(`${sn(id)}: ${open ? 'abrir' : 'cerrar'} válvula de aspiración de ${p ? p.name : pid}`); }
+    function sucPos(id, pid) { const k = E[id] && E[id].pumps[pid]; return k ? k.suc.pos : null; }
+    function setStValve(id, which, open) { const v = SV[id] && SV[id][which]; if (!v) return; v.target = open ? 1 : 0; ctx.evLog(`${sn(id)}: ${open ? 'abrir' : 'cerrar'} MOV de ${which === 'in' ? 'entrada' : 'salida'} de estación`); }
+    function stValvePos(id, which) { const v = SV[id] && SV[id][which]; return v ? v.pos : null; }
+    function pumpCaseP(id, pid) { const k = E[id] && E[id].pumps[pid]; return k ? k.pCase : null; }
     function markManualStart(id, pid) { const k = E[id] && E[id].pumps[pid]; if (k) k.manualStart = true; }
     function movPos(id, pid) { const k = E[id] && E[id].pumps[pid]; return k ? k.mov.pos : null; }
     function select(id) { if (EQ_ST.includes(id)) { sel = id; pumpSel = null; } }
@@ -447,9 +494,11 @@
     }
     function reset() {
       for (const id of EQ_ST) { const e = E[id]; e.hvacFail = false; e.elec.sag = 0; e.filters.forEach((f) => { f.fault = false; f.foul = Math.min(f.foul, 0.3); }); Object.values(e.pumps).forEach((k) => { k.lubeFault = false; k.heat = 0; k.vibFault = 0; k.vfdFault = false; k.sealLeak = false; }); e.trap.sensorFault = false; }
+      for (const id of SV_ST) { SV[id].in.target = 1; SV[id].out.target = 1; st(id)._pshhInhibit = false; }
     }
 
-    return { update, render, click, alarms, annunciators, clog, unclog, reset, state: E, selector: '[data-eqst],[data-eqpump],[data-eq],[data-mov]', pumpPermissives, stationPermissives, setMov, closeAllMovs, markManualStart, movPos, select, summary, PUMP_ST, EQ_ST, TRAP_ST, LIM };
+    const api = { update, render, click, alarms, annunciators, clog, unclog, reset, state: E, selector: '[data-eqst],[data-eqpump],[data-eq],[data-mov],[data-suc],[data-stv]', pumpPermissives, stationPermissives, setMov, closeAllMovs, markManualStart, movPos, setSuc, sucPos, setStValve, stValvePos, pumpCaseP, SV_ST, select, summary, PUMP_ST, EQ_ST, TRAP_ST, LIM, onStart: null };
+    return api;
   }
 
   global.createEquip = createEquip;
