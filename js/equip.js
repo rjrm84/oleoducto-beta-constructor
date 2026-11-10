@@ -54,6 +54,8 @@
         vfdRoom: 24 + Math.random() * 2, hvacFail: false,
         pumps: {},
         trap: { xsOut: null, xsIn: null, log: [], lastLaunch: null },
+        // tanque sumidero: recibe drenajes de trampas, sellos y válvulas; su bomba lo reinyecta a la línea
+        sump: { capL: 15000, volL: 3000 + Math.random() * 2500, pend: 0, passing: 0, pumpFault: false, mode: 'auto', run: false, lastL: null, lastR: null, unexplT: 0, inj: 0, log: [], lowFlow: false },
       };
       for (const p of mains) {
         E[id].pumps[p.id] = {
@@ -212,6 +214,28 @@
           }
           if (tr.log.length > 12) tr.log.length = 12;
         }
+        // --- tanque sumidero ---
+        {
+          const sp = e.sump, pg = s.pig || {};
+          const slog = (t) => { sp.log.unshift(`${hhmm()} · ${t}`); if (sp.log.length > 10) sp.log.length = 10; };
+          if (pg.active && pg.fromId === id && pg.launchedAt != null && sp.lastL !== pg.launchedAt) { sp.lastL = pg.launchedAt; sp.pend += 2500; slog('drenaje de la trampa lanzadora (≈2.500 L)'); }
+          if (pg.status === 'received' && pg.atId === id && pg.launchedAt != null && sp.lastR !== pg.launchedAt) { sp.lastR = pg.launchedAt; sp.pend += 3000; slog('drenaje de la trampa receptora (≈3.000 L)'); }
+          const drain = Math.min(sp.pend, 7500 * dtH); sp.pend -= drain;
+          const seal = Object.values(e.pumps).some((k) => k.sealLeak) ? 150 * dtH : 0;
+          const pass = sp.passing * dtH;
+          sp.volL = Math.min(sp.capL, sp.volL + drain + seal + pass);
+          const pct = sp.volL / sp.capL;
+          // bomba del sumidero: en automático arranca en alto nivel y para en bajo; protección por muy bajo nivel
+          const pIn = s.pressuresIn[id] || 0;
+          sp.lowFlow = sp.run && pIn > 30;
+          if (sp.mode === 'auto' && !sp.pumpFault) { if (pct >= 0.7 && !sp.run) { sp.run = true; slog('arranque automático de la bomba (alto nivel): inyección a la línea'); } else if (pct <= 0.2 && sp.run) { sp.run = false; slog('parada automática de la bomba (bajo nivel)'); } }
+          if (sp.run && (pct <= 0.08 || sp.pumpFault)) { sp.run = false; slog(sp.pumpFault ? 'bomba del sumidero disparada' : 'parada por muy bajo nivel (protección de marcha en seco)'); }
+          const out = sp.run && !sp.lowFlow ? Math.min(sp.volL - 0.05 * sp.capL, 6000 * dtH) : 0;
+          sp.volL = Math.max(0, sp.volL - Math.max(0, out));
+          sp.inj = sp.run && !sp.lowFlow ? 6 : 0; // m³/h hacia la aspiración de la estación
+          // ingreso sin drenaje programado: algo está dejando pasaje
+          if ((pass + seal) > 0 && drain <= 0) sp.unexplT += dtH; else if (drain > 0) sp.unexplT = 0; else sp.unexplT = Math.max(0, sp.unexplT - dtH);
+        }
       }
     }
 
@@ -234,6 +258,15 @@
         if (e.dp >= LIM.filtAlm) out.push({ id: `eq-filt-${id}`, severity: 'critical', text: `${tg}: filtro de entrada ocluido · ΔP ${fmt(e.dp, 2)} kg/cm²`, tag: tg });
         else if (e.dp >= LIM.filtWarn) out.push({ id: `eq-filtw-${id}`, severity: 'warn', text: `${tg}: alta ΔP de filtro ${fmt(e.dp, 2)} kg/cm²`, tag: tg });
         if (e.elec.vIn < LIM.vInLow && PUMP_ST.includes(id) && !hasTurbineOnly(x)) out.push({ id: `eq-mt-${id}`, severity: e.elec.vIn < 5 ? 'critical' : 'warn', text: `${tg}: baja tensión de entrada ${fmt(e.elec.vIn, 1)} kV`, tag: tg });
+        {
+          const sp = e.sump, pct = sp.volL / sp.capL;
+          if (pct >= 0.995) out.push({ id: `eq-sumov-${id}`, severity: 'critical', text: `${tg}: REBALSE del tanque sumidero · derrame en la estación`, tag: tg });
+          else if (pct >= 0.85) out.push({ id: `eq-sumhh-${id}`, severity: 'critical', text: `${tg}: tanque sumidero muy alto nivel (${fmt(pct * 100, 0)} %)`, tag: tg });
+          else if (pct >= 0.7) out.push({ id: `eq-sumh-${id}`, severity: 'warn', text: `${tg}: tanque sumidero alto nivel (${fmt(pct * 100, 0)} %)`, tag: tg });
+          if (sp.unexplT > 0.15) out.push({ id: `eq-sumin-${id}`, severity: 'warn', text: `${tg}: ingreso al sumidero sin drenaje programado · posible válvula pasante o sello`, tag: tg });
+          if (sp.pumpFault) out.push({ id: `eq-sump-${id}`, severity: 'critical', text: `${tg}: falla de la bomba del sumidero`, tag: tg });
+          if (sp.lowFlow) out.push({ id: `eq-sumlf-${id}`, severity: 'warn', text: `${tg}: bomba del sumidero sin caudal (presión de línea alta)`, tag: tg });
+        }
         if (e.trap.sensorFault) out.push({ id: `eq-xs-${id}`, severity: 'warn', text: `${tg}: falla del sensor de paso de scraper`, tag: tg });
         if (e.vfdRoom >= 32) out.push({ id: `eq-vfdr-${id}`, severity: e.vfdRoom >= 37 ? 'critical' : 'warn', text: `${tg}: alta temperatura en sala de variadores ${fmt(e.vfdRoom, 1)} °C`, tag: tg });
         for (const p of (x.pumps || []).filter((q) => !isBooster(q))) {
@@ -274,6 +307,8 @@
         ['ALTA TEMP. COJINETES', anyBrg, 2],
         ['ALTA VIBRACIÓN', anyVib, 2],
         ['FALLA VARIADOR / SALA', anyVfd, 1],
+        ['SUMIDERO ALTO NIVEL', e.sump.volL / e.sump.capL >= 0.7, e.sump.volL / e.sump.capL >= 0.85 ? 1 : 2],
+        ['INGRESO A SUMIDERO', e.sump.unexplT > 0.15, 2],
         ['BOMBA FUERA DE CURVA', anyCurve, 3],
       ];
     }
@@ -401,12 +436,26 @@
       return `<div class="eq-card"><h3 class="sc-h3">Trampa de scraper <span>${esc(x.pigTrap.type || '')}</span></h3>${g}<div class="eq-row"><div class="eq-kv"><span>XS salida</span><b>${stOut}</b></div><div class="eq-kv"><span>XS llegada</span><b>${stIn}</b></div></div><div class="ev-log">${tr.log.length ? tr.log.map((l) => `<div>${esc(l)}</div>`).join('') : '<div class="me-empty">Sin pasos registrados. Lanzá un pig desde SCADA › Integridad.</div>'}</div></div>`;
     }
 
+    function sumpPanel(id) {
+      const sp = E[id].sump, pct = sp.volL / sp.capL;
+      const W = 560, H = 190, tx = 150, ty = 50, tw = 220, th = 100;
+      const lamp = (y, t, on, cls) => `<g transform="translate(40 ${y})"><circle r="7" class="eq-lamp ${on ? cls : ''}"/><text x="14" y="4" class="eq-ts">${t}</text></g>`;
+      let g = `<svg viewBox="0 0 ${W} ${H}" class="eq-svg" role="img" aria-label="Tanque sumidero de ${esc(NAME[id] || id)}">`;
+      g += lamp(40, 'Muy alto', pct >= 0.85, 'bad') + lamp(66, 'Alto', pct >= 0.7, 'warn') + lamp(118, 'Bajo', pct <= 0.2, 'warn') + lamp(144, 'Muy bajo', pct <= 0.1, 'bad');
+      g += `<rect x="${tx}" y="${ty}" width="${tw}" height="${th}" rx="40" class="eq-tank"/><clipPath id="sump-${id}"><rect x="${tx}" y="${ty}" width="${tw}" height="${th}" rx="40"/></clipPath><rect x="${tx}" y="${ty + th * (1 - pct)}" width="${tw}" height="${th * pct}" clip-path="url(#sump-${id})" class="eq-tank-l"/>`;
+      g += `<text x="${tx + tw / 2}" y="${ty + 42}" text-anchor="middle" class="eq-t">${fmt(pct * 1500, 0)} mm</text><text x="${tx + tw / 2}" y="${ty + 62}" text-anchor="middle" class="eq-t">${Math.round(sp.volL).toLocaleString('es-AR')} L</text>`;
+      g += `<line x1="${tx + 60}" y1="30" x2="${tx + 60}" y2="${ty}" class="eq-pipe thin"/><text x="${tx + 66}" y="26" class="eq-ts">drenajes de trampas, sellos y válvulas</text>`;
+      g += `<line x1="${tx + tw}" y1="${ty + th - 14}" x2="430" y2="${ty + th - 14}" class="eq-pipe thin"/><g transform="translate(445 ${ty + th - 14})"><circle r="14" class="eq-pump ${sp.pumpFault ? 'bad' : sp.run ? 'run' : ''}"/><text y="34" text-anchor="middle" class="eq-ts">bomba ${sp.mode === 'auto' ? 'AUTO' : 'MAN'}</text></g><line x1="459" y1="${ty + th - 14}" x2="540" y2="${ty + th - 14}" class="eq-pipe thin"/><text x="470" y="${ty + th - 30}" class="eq-ts">a la línea</text>`;
+      g += '</svg>';
+      return `<div class="eq-card"><h3 class="sc-h3">Tanque sumidero <span>se vacía reinyectando a la aspiración de la estación</span></h3>${g}<div class="eq-row"><div class="eq-kv"><span>Ingreso pendiente</span><b>${fmt(sp.pend, 0)} L</b></div><div class="eq-kv"><span>Inyección</span><b>${sp.inj ? sp.inj + ' m³/h' : 'parada'}</b></div><div class="me-btns"><button type="button" class="sc-btn" data-eq="sumpmode">${sp.mode === 'auto' ? 'Pasar a manual' : 'Pasar a automático'}</button>${sp.mode === 'man' ? `<button type="button" class="sc-btn exec" data-eq="sumprun">${sp.run ? 'Parar bomba' : 'Inyectar'}</button>` : ''}${sp.pumpFault ? '<button type="button" class="sc-btn" data-eq="sumpfix">Reparar bomba</button>' : ''}</div></div><p class="me-note">Alto nivel 70 % arranca la bomba, bajo 20 % la para, muy bajo 8 % protege por marcha en seco. Si el nivel sube sin un drenaje programado, algo está dejando pasaje: revisar válvulas de drenaje y sellos.</p><div class="ev-log">${sp.log.length ? sp.log.map((l) => `<div>${esc(l)}</div>`).join('') : '<div class="me-empty">Sin movimientos.</div>'}</div></div>`;
+    }
+
     function render() {
       if (!EQ_ST.includes(sel)) sel = EQ_ST[0];
       const id = sel;
       let h = `<div class="pid-top"><div class="pid-sel">${EQ_ST.map((x) => `<button type="button" data-eqst="${x}" class="${x === id ? 'on' : ''}">${esc(sn(x))}</button>`).join('')}</div><div class="pid-title">${esc(NAME[id] || id)} · equipos <span>PK ${st(id).pkKm}</span></div></div>`;
       h += `<div class="sc-ann">${annunciators(id).map(([t, on, pr]) => `<div class="sc-an ${on ? 'on p' + pr : ''}">${t}</div>`).join('')}</div>`;
-      h += `<div class="eq-grid">${elecPanel(id)}${filtPanel(id)}${vfdPanel(id)}${trapPanel(id)}${pumpsPanel(id)}</div>`;
+      h += `<div class="eq-grid">${elecPanel(id)}${filtPanel(id)}${vfdPanel(id)}${trapPanel(id)}${sumpPanel(id)}${pumpsPanel(id)}</div>`;
       return h;
     }
 
@@ -419,6 +468,9 @@
       if (d.stv) { setStValve(sel, d.stv, d.open === '1'); return true; }
       const e = E[sel];
       if (!d.eq || !e) return false;
+      if (d.eq === 'sumpmode') { e.sump.mode = e.sump.mode === 'auto' ? 'man' : 'auto'; ctx.evLog(`${sn(sel)}: bomba del sumidero en ${e.sump.mode === 'auto' ? 'automático' : 'manual'}`); return true; }
+      if (d.eq === 'sumprun') { if (e.sump.pumpFault) return true; e.sump.run = !e.sump.run; ctx.evLog(`${sn(sel)}: ${e.sump.run ? 'inyección manual del sumidero' : 'parada de la bomba del sumidero'}`); return true; }
+      if (d.eq === 'sumpfix') { e.sump.pumpFault = false; ctx.evLog(`${sn(sel)}: bomba del sumidero reparada`); return true; }
       const x = st(sel);
       const duty = e.filters.find((f) => f.mode === 'servicio');
       const pumpK = e.pumps[pumpSel];
@@ -495,7 +547,7 @@
       return { dp: e.dp || 0, brg: Math.max(...ks.map((k) => Math.max(k.brg.pDE, k.brg.pNDE, k.brg.mDE, k.brg.mNDE))), oil: Math.min(...ks.map((k) => k.oilP)), vIn: e.elec.vIn, alarm: annunciators(id).some((a) => a[1]) };
     }
     function reset() {
-      for (const id of EQ_ST) { const e = E[id]; e.hvacFail = false; e.elec.sag = 0; e.filters.forEach((f) => { f.fault = false; f.foul = Math.min(f.foul, 0.3); }); Object.values(e.pumps).forEach((k) => { k.lubeFault = false; k.heat = 0; k.vibFault = 0; k.vfdFault = false; k.sealLeak = false; }); e.trap.sensorFault = false; }
+      for (const id of EQ_ST) { const e = E[id]; e.hvacFail = false; e.elec.sag = 0; e.filters.forEach((f) => { f.fault = false; f.foul = Math.min(f.foul, 0.3); }); Object.values(e.pumps).forEach((k) => { k.lubeFault = false; k.heat = 0; k.vibFault = 0; k.vfdFault = false; k.sealLeak = false; }); e.trap.sensorFault = false; e.sump.passing = 0; e.sump.pumpFault = false; e.sump.mode = 'auto'; }
       for (const id of SV_ST) { SV[id].in.target = 1; SV[id].out.target = 1; st(id)._pshhInhibit = false; }
     }
 

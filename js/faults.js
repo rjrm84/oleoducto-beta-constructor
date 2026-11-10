@@ -103,6 +103,10 @@
         run: (id) => { const e = eq(); if (e) e.setStValve(id, 'out', false); } },
       { k: 'pshh', g: 'Integridad', t: 'Presostato de alta inhibido (falla de protección)', where: 'station', d: 'El PSHH de la estación queda inhibido: no dispara las bombas por alta presión.', c: 'Ante un bloqueo, la presión sigue subiendo hasta que abre la PSV a 95 kg/cm² y alivia crudo al tanque de alivio.', sup: ['Ver la protección inhibida en el anunciador', 'Restituir la protección antes de seguir operando', 'Si hay bloqueo, parar las bombas a mano', 'Registrar la inhibición y su autorización'],
         run: (id) => { st(id)._pshhInhibit = true; } },
+      { k: 'pasante', g: 'Bombas', t: 'Válvula de drenaje pasante al sumidero', where: 'station', d: 'Una válvula de drenaje no cierra bien y deja pasar crudo al tanque sumidero.', c: 'El sumidero sube sin que haya un drenaje programado y la bomba arranca más seguido; si no se corrige, llega a muy alto nivel.', sup: ['Ver la alarma de ingreso al sumidero en Equipos', 'Confirmar que no hay lanzamiento ni recepción de scraper en curso', 'Recorrer las válvulas de drenaje y los sellos de la estación', 'Cerrar o bloquear la válvula pasante y pedir su reparación'],
+        run: (id) => { const e = eq(); if (e) e.state[id].sump.passing = 900; } },
+      { k: 'bbasump', g: 'Bombas', t: 'Falla de la bomba del tanque sumidero', where: 'station', d: 'La bomba que reinyecta el sumidero a la línea queda fuera de servicio.', c: 'El sumidero no se vacía: con el próximo drenaje de scraper llega a alto y muy alto nivel.', sup: ['Ver el estado de la bomba en Equipos › Tanque sumidero', 'Postergar drenajes y lanzamientos de scraper', 'Pedir la reparación de la bomba', 'Si llega a muy alto nivel, vaciar con camión de vacío'],
+        run: (id) => { const e = eq(); if (e) { e.state[id].sump.pumpFault = true; e.state[id].sump.volL = Math.max(e.state[id].sump.volL, e.state[id].sump.capL * 0.62); } } },
       { k: 'surge', g: 'Integridad', t: 'Golpe de ariete', where: 'line', d: 'Una parada brusca genera una onda de sobrepresión.', c: 'Varias estaciones se acercan al 90 % de la MAOP.', sup: ['Bajar caudal en rampa', 'No arrancar ni cerrar válvulas rápido', 'Esperar que se amortigüe la onda', 'Verificar MAOP por tramo en Integridad'],
         run: () => sim.applyScenario('sobrepresion_surge') },
       { k: 'altap', g: 'Integridad', t: 'Alta presión de descarga (falla del PID)', where: 'station', d: 'El lazo PID de descarga falla con la válvula de control abierta.', c: 'La presión de descarga sube hasta el límite del ducto y actúa el disparo por MAOP.', sup: ['Ver el PID en el P&ID de la estación', 'Pasar el lazo a manual y bajar el set point', 'Bajar caudal si la presión no baja', 'Verificar la presión máxima del tramo'],
@@ -168,6 +172,8 @@
       if (c.k === 'vb') sim.setValve(a.loc, true);
       if (c.k === 'movout' && e) e.setStValve(a.loc, 'out', true);
       if (c.k === 'pshh') st(a.loc)._pshhInhibit = false;
+      if (c.k === 'pasante' && e) e.state[a.loc].sump.passing = 0;
+      if (c.k === 'bbasump' && e) e.state[a.loc].sump.pumpFault = false;
       if (c.k === 'com') delete ev.comm[a.loc];
       if (c.k === 'n2') delete ev.n2[a.loc];
       if (c.k === 'xs' && e) e.state[a.loc].trap.sensorFault = false;
