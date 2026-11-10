@@ -1150,7 +1150,9 @@
             flow += stationInjectionTotal(st);
             for (const s of state.config.segments || []) flow = Math.min(flow, segmentQMax(s));
             // v7: la presión de cabecera es la necesaria para el caudal (no la máxima de bombas)
-            if (!state.scenarioActive) {
+            if (st._manualCv != null) {
+              pOut = pumpBoostKg(st) * stationRampF('ph') * Math.max(0, Math.min(1, Number(st._manualCv) / 100)); pLine = pOut;
+            } else if (!state.scenarioActive) {
               const needPh = requiredDischargeKg(0, flow);
               if (needPh != null) { pOut = Math.min(pOut, Math.max(needPh, 2)); pLine = pOut; }
             }
@@ -1225,11 +1227,14 @@
               }
               boost *= stationRampF(st.id);
               pOut = pIn + boost;
+              // v12: control en manual: la salida del controlador (CV %) fija cuánto aporta la estación, sin SP
+              const manCv = st._manualCv != null ? Math.max(0, Math.min(1, Number(st._manualCv) / 100)) : null;
+              if (manCv != null) pOut = pIn + boost * manCv;
               // v5: lazo de descarga de la estación (PID con selector): nunca supera el SP de descarga
-              if (st.pDescSpKgCm2 != null) pOut = Math.min(pOut, Number(st.pDescSpKgCm2));
+              if (manCv == null && st.pDescSpKgCm2 != null) pOut = Math.min(pOut, Number(st.pDescSpKgCm2));
               // v7: cada EB entrega la presión necesaria para el caudal (PID con selector):
               // más caudal o menos DRA → más presión; tope en el SP del PID.
-              if (!state.scenarioActive && boost > 0) {
+              if (!state.scenarioActive && boost > 0 && manCv == null) {
                 const need = requiredDischargeKg(i, flow);
                 if (need != null) {
                   const floor = st.id === 'rt' || (isCustom && st.id === lastPumpId()) ? 0 : pIn; // RT puede estrangular para entregar el SP de LC

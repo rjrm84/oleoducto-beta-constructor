@@ -227,7 +227,7 @@
 
     // ---------------- sub-vistas ----------------
     function nav() {
-      const items = [['principal', 'Principal'], ['estacion', 'Estación (P&ID)'], ['equipos', 'Equipos'], ['integridad', 'Integridad'], ['terminal', 'Terminal ' + TN], ['medicion', 'Medición'], ['cierres', 'Cierres OMNI'], ['custody', 'Custody'], ['alarmlog', 'Hist. alarmas'], ['eventos', 'Eventos y fallas']].concat(CUST ? [] : [['clasica', 'Consola clásica']]).filter(([k]) => k !== 'equipos' || equip);
+      const items = [['principal', 'Principal'], ['estacion', 'Estación (P&ID)'], ['control', 'Control PID'], ['equipos', 'Equipos'], ['integridad', 'Integridad'], ['terminal', 'Terminal ' + TN], ['medicion', 'Medición'], ['cierres', 'Cierres OMNI'], ['custody', 'Custody'], ['alarmlog', 'Hist. alarmas'], ['eventos', 'Eventos y fallas']].concat(CUST ? [] : [['clasica', 'Consola clásica']]).filter(([k]) => (k !== 'equipos' || equip) && (k !== 'control' || pidfp));
       $('ing-nav').innerHTML = items.map(([k, t]) => `<button type="button" class="${k === sub ? 'on' : ''}" data-sub="${k}">${t}</button>`).join('');
     }
     function setSub(k) {
@@ -380,7 +380,7 @@
 
       let h = `<div class="pid-top"><div class="pid-sel">${ST.map((x) => `<button type="button" data-st="${x}" class="${x === id ? 'on' : ''}">${sim.stationById(x).shortName}</button>`).join('')}</div><div class="pid-title">${NAME[id]} <span>PK ${st.pkKm} · cota ${Math.round(app.geo.elevAt(st.pkKm)).toLocaleString('es-AR')} m</span></div></div>`;
       h += `<div class="pid-wrap">${g}</div>`;
-      if (equip && equip.summary(id)) h += `<div class="pid-links"><button type="button" class="sc-link" data-goeq="${id}">Ver equipos de ${esc(st.shortName)}: filtros, electricidad 33/6 kV, lubricación, cojinetes, variadores</button>${mains.length ? '<span>Todas las válvulas motorizadas se operan desde acá: entrada y salida de estación, aspiración y descarga de cada bomba. Para arrancar: aspiración abierta, descarga cerrada, arranque y apertura de la descarga.</span>' : ''}</div>`;
+      if (equip && equip.summary(id)) h += `<div class="pid-links"><button type="button" class="sc-link" data-goeq="${id}">Ver equipos de ${esc(st.shortName)}: filtros, electricidad 33/6 kV, lubricación, cojinetes, variadores</button>${pidfp ? '<button type="button" class="sc-link" data-gofp="1">Abrir el faceplate de control (SP, rampas, A/M, variadores)</button>' : ''}${mains.length ? '<span>Todas las válvulas motorizadas se operan desde acá: entrada y salida de estación, aspiración y descarga de cada bomba. Para arrancar: aspiración abierta, descarga cerrada, arranque y apertura de la descarga.</span>' : ''}</div>`;
       if (mains.length) {
         const spT = st.pDescSpTarget != null ? st.pDescSpTarget : st.pDescSpKgCm2;
         const draOn = sim.stationDraActive(st);
@@ -523,13 +523,18 @@
       return h + '</details></div></div>';
     }
 
+    function controlView() {
+      const pumpSt = ST.filter((x) => (sim.stationById(x).pumps || []).some((p) => !(p.role || '').includes('booster')));
+      if (!pumpSt.includes(stSel)) stSel = pumpSt[0];
+      return `<div class="pid-top"><div class="pid-sel">${pumpSt.map((x) => `<button type="button" data-st="${x}" class="${x === stSel ? 'on' : ''}">${sim.stationById(x).shortName}</button>`).join('')}</div><div class="pid-title">${NAME[stSel]} <span>faceplate de control</span></div></div>` + pidfp.render(stSel);
+    }
     // ---------------- render ----------------
     let built = '';
     let lastKey = '';
     function render(force) {
       if (sub === 'clasica') return;
       if (!force && (root.contains(document.activeElement) && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT'))) return;
-      const html = sub === 'equipos' && equip ? equip.render() : ext && ext.render[sub] ? ext.render[sub]() : sub === 'principal' ? principal() : sub === 'estacion' ? pid() : sub === 'medicion' ? medicion() : eventos();
+      const html = sub === 'control' && pidfp ? controlView() : sub === 'equipos' && equip ? equip.render() : ext && ext.render[sub] ? ext.render[sub]() : sub === 'principal' ? principal() : sub === 'estacion' ? pid() : sub === 'medicion' ? medicion() : eventos();
       if (sub === 'medicion' && !force && proving) {
         // no pisar el panel del prover mientras corre
         const keep = $('me-prover');
@@ -574,11 +579,13 @@
       }
       if (equip && sub === 'equipos') { const tq = e.target.closest(equip.selector); if (tq && equip.click(tq)) { render(true); return; } }
       if (ext) { const tx = e.target.closest(ext.selector); if (tx && ext.click(tx)) { render(true); return; } }
+      if (pidfp && sub === 'control') { const tp = e.target.closest(pidfp.selector); if (tp && pidfp.click(tp, stSel)) { render(true); return; } }
       if (faults && sub === 'eventos') { const tf = e.target.closest(faults.selector); if (tf && faults.click(tf)) { render(true); return; } }
-      const g2 = e.target.closest('[data-goeq],[data-closeall],[data-esdreset]');
+      const g2 = e.target.closest('[data-goeq],[data-gofp],[data-closeall],[data-esdreset]');
       if (g2) {
         const d2 = g2.dataset;
         if (d2.goeq && equip) { equip.select(d2.goeq); setSub('equipos'); return; }
+        if (d2.gofp) { setSub('control'); return; }
         if (d2.closeall && equip) { equip.closeAllMovs(d2.closeall); app.toast('Cerrando válvulas de descarga (carrera 1 min)'); }
         if (d2.esdreset) { delete ev.esd[d2.esdreset]; if (ev.elec[d2.esdreset]) ev.elec[d2.esdreset].cause = 'Paro de emergencia (repuesto)'; evLog(`${sim.stationById(d2.esdreset).shortName}: pulsador de paro de emergencia repuesto`); }
         render(true); return;
@@ -644,6 +651,7 @@
     });
     root.addEventListener('change', (e) => {
       if (ext && ext.change(e.target)) { render(true); return; }
+      if (pidfp && sub === 'control' && pidfp.change(e.target, stSel)) { if (e.target.blur) e.target.blur(); render(true); return; }
       if (faults && faults.change(e.target)) { if (e.target.tagName === 'SELECT') e.target.blur(); render(true); return; }
       const c = e.target.closest('[data-pb]');
       if (c) sim.togglePlaybookCheck(c.dataset.pb);
@@ -653,6 +661,7 @@
     const equip = global.createEquip ? global.createEquip(app, { TAGN, NAME, ev, evLog }) : null;
     if (equip && app.alarms && app.alarms.addSource) app.alarms.addSource(() => equip.alarms());
     if (equip) equip.onStart = (sid, p) => { if (S().stationRamp && S().stationRamp.__init) return; startRamp(`arranque de ${p.name} en ${sim.stationById(sid).shortName}`); };
+    const pidfp = global.createPidFp ? global.createPidFp(app, { equip: () => equip, evLog, stv: (id) => stv(id), MAOP, QMAX }) : null;
     const faults = global.createFaults ? global.createFaults(app, { ev, evLog, equip: () => equip }) : null;
     nav();
     setSub('principal');
@@ -671,6 +680,7 @@
       }
       if (equip) equip.update();
       if (faults) faults.tick(dt);
+      if (pidfp) pidfp.update();
       eventTick();
       provingStep();
       if (ext) ext.update();
@@ -679,7 +689,7 @@
       if (acc > 0.5) { acc = 0; render(false); }
     }
 
-    return { update, resetEvents() { Object.keys(ev.elec).forEach((k) => delete ev.elec[k]); ev.filter = {}; ev.n2 = {}; ev.esd = {}; ev.comm = {}; if (equip) equip.reset(); if (faults) faults.reset(); }, meters, equip, ev, get faults() { return faults; } };
+    return { update, resetEvents() { Object.keys(ev.elec).forEach((k) => delete ev.elec[k]); ev.filter = {}; ev.n2 = {}; ev.esd = {}; ev.comm = {}; if (equip) equip.reset(); if (faults) faults.reset(); if (pidfp) pidfp.reset(); }, meters, equip, ev, get faults() { return faults; } };
   }
 
   global.createIng = createIng;

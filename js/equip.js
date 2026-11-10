@@ -180,14 +180,16 @@
           mv.pos = mv.target > mv.pos ? Math.min(mv.target, mv.pos + stepMv) : Math.max(mv.target, mv.pos - stepMv);
           const sv = k.suc;
           sv.pos = sv.target > sv.pos ? Math.min(sv.target, sv.pos + stepMv) : Math.max(sv.target, sv.pos - stepMv);
-          p.powerFraction = on ? Math.max(0, Math.min(1, mv.pos, sv.pos)) : 1;
+          // variador en manual: la altura sigue la ley de afinidad (H ∝ n²)
+          const nMan = p.drive === 'variador' && p._vfdMan != null ? Math.max(0, Math.min(1.05, p._vfdMan / 100)) : null;
+          p.powerFraction = on ? Math.max(0, Math.min(1, mv.pos, sv.pos)) * (nMan != null ? nMan * nMan : 1) : 1;
           if (on && mv.pos < 0.1) { k.deadT += dtH; if (k.deadT > 0.05) k.heat = Math.max(k.heat, 0.5); } else k.deadT = 0;
           // aspiración cerrada con la bomba en marcha: cavita y dispara por baja presión de aspiración (~20 s)
           if (on && sv.pos < 0.1) { k.sucT += dtH; if (k.sucT > 0.0055) { k.sucT = 0; sim.setPump(id, p.id, false); ctx.evLog(`${sn(id)}: disparo de ${p.name} por baja presión de aspiración (válvula de aspiración cerrada)`); } } else k.sucT = 0;
           // presión en la carcasa de la bomba: con la descarga cerrada sube a la presión de cierre
           k.pCase = on ? (mv.pos < 0.1 ? (s.pressuresIn[id] || 0) + Hb * 1.15 * Math.max(0.05, sv.pos) : Math.max(s.pressuresOut[id] || 0, (s.pressuresIn[id] || 0))) : (s.pressuresIn[id] || 0) * Math.max(0, sv.pos);
           // variador
-          k.hz = on && p.drive === 'variador' ? Math.min(50, 38 + 12 * Math.min(1, load)) : 0;
+          k.hz = on && p.drive === 'variador' ? (nMan != null ? 50 * nMan : Math.min(50, 38 + 12 * Math.min(1, load))) : 0;
           k.rpm = on ? (p.drive === 'variador' ? k.hz * 59.6 : p.drive === 'turbina' ? 4300 + 500 * Math.min(1, load) : 2980) : 0;
         }
         // --- trampa de scraper ---
