@@ -134,7 +134,13 @@
     s.dest = Object.assign(s.dest, { kind: 'puerto', name: 'Terminal portuaria', tanks: 4, tankM3: 60000, shipM3: 80000, loadRateM3h: 8000, shipIntervalH: 0 });
     const inj = G.newStation('inyeccion', 95, 1);
     inj.name = 'Yacimiento Allen'; inj.short = 'ALL'; inj.injection = { name: 'Yacimiento Allen', rate: 60, owner: 'Tercero' };
-    s.stations = [inj];
+    const ptc = G.newStation('planta', 40, 1);
+    ptc.name = 'PTC Loma Campana'; ptc.short = 'PTC'; ptc.plant = { tipo: 'ptc', rate: 150, prod: 150, capM3: 30000, levelPct: 45, modo: 'recibe', on: true, bsw: 0.3 };
+    const alm = G.newStation('planta', 300, 2);
+    alm.name = 'Playa de tanques Chelforó'; alm.short = 'PTQ'; alm.plant = { tipo: 'almacenaje', rate: 200, prod: 0, capM3: 80000, levelPct: 40, modo: 'recibe', on: false, bsw: 0 };
+    const ent = G.newStation('planta', 470, 3);
+    ent.name = 'Entrega Refinería Bahía'; ent.short = 'REF'; ent.plant = { tipo: 'entrega', rate: 300, prod: 300, capM3: 40000, levelPct: 50, modo: 'recibe', on: true, bsw: 0 };
+    s.stations = [inj, ptc, alm, ent];
     G.autoDesign(s, true);
     const mid = s.stations.filter((x) => x.kind === 'bombeo');
     if (mid.length) { mid[0].altHead = true; mid[0].tankM3 = 25000; }
@@ -344,7 +350,7 @@
       g += `<path d="${h}" fill="none" stroke="#8fe6ff" stroke-width="2"/>`;
     }
     if (o.valves !== false) for (const v of spec.valves || []) g += `<rect x="${X(v.pk) - 3}" y="${Y(G.elevAt(prof, v.pk)) - 3}" width="6" height="6" fill="#e7e3da" transform="rotate(45 ${X(v.pk)} ${Y(G.elevAt(prof, v.pk))})"><title>${esc(v.name)} · PK ${v.pk}</title></rect>`;
-    const col = { cabecera: '#57d68d', terminal: '#57d68d', bombeo: '#e8b04a', reductora: '#8fc1e3', inyeccion: '#c48df0' };
+    const col = { cabecera: '#57d68d', terminal: '#57d68d', bombeo: '#e8b04a', reductora: '#8fc1e3', inyeccion: '#c48df0', planta: '#4fd1c5' };
     let lastX = -99;
     for (const s of spec.stations || []) {
       const x = X(s.pk), y = Y(G.elevAt(prof, s.pk));
@@ -708,11 +714,11 @@
   REFRESH.operacion = () => { opOut(); renderSteps(); };
 
   // ---- 5. estaciones ----
-  VIEWS.estaciones = () => `<h2>Estaciones</h2><p class="b-lead">El constructor recorre el perfil a caudal de diseño y ubica una estación de bombeo donde la presión llegaría al set point de aspiración, y una reductora donde una bajada superaría la MAOP. Después podés mover, agregar o quitar estaciones y ajustar bombas, medición, trampas e inyecciones.</p>
+  VIEWS.estaciones = () => `<h2>Estaciones</h2><p class="b-lead">El constructor recorre el perfil a caudal de diseño y ubica una estación de bombeo donde la presión llegaría al set point de aspiración, y una reductora donde una bajada superaría la MAOP. Después podés mover, agregar o quitar estaciones y ajustar bombas, medición, trampas e inyecciones. Con el tipo <b>Planta</b> agregás plantas de tratamiento que aportan crudo, playas de tanques que reciben o despachan y entregas a clientes o refinerías.</p>
     <div class="b-box"><div class="b-row"><button type="button" class="b-btn b-btn-hot" id="st-auto">Proponer automáticamente</button><button type="button" class="b-btn" id="st-size">Recalcular bombas</button>
       <span style="flex:1"></span><label class="b-f" style="width:170px" for="st-new-k">Tipo<select id="st-new-k">${Object.keys(G.KINDS).filter((k) => k !== 'cabecera' && k !== 'terminal').map((k) => `<option value="${k}">${G.KINDS[k]}</option>`).join('')}</select></label><label class="b-f" style="width:110px" for="st-new-pk">PK (km)<input id="st-new-pk" type="number" step="0.1" min="0" value="${n0((spec.lengthKm || 0) / 2)}"></label><button type="button" class="b-btn" id="st-add" style="align-self:end">Agregar</button></div>
       <div id="st-autonote"></div></div>
-    <div class="b-box"><h3>Perfil a caudal de diseño</h3><div id="st-prof"></div>${legend([['#8fe6ff', 'Piezométrica con set points de descarga'], ['#e5484d', 'MAOP', 1], ['#e8b04a', 'Bombeo'], ['#8fc1e3', 'Reductora'], ['#c48df0', 'Inyección']])}<div id="st-warn"></div></div>
+    <div class="b-box"><h3>Perfil a caudal de diseño</h3><div id="st-prof"></div>${legend([['#8fe6ff', 'Piezométrica con set points de descarga'], ['#e5484d', 'MAOP', 1], ['#e8b04a', 'Bombeo'], ['#8fc1e3', 'Reductora'], ['#c48df0', 'Inyección'], ['#4fd1c5', 'Planta']])}<div id="st-warn"></div></div>
     <div class="b-sts" id="st-list"></div>`;
   function stProf() {
     const d = designProfile();
@@ -721,11 +727,17 @@
     const w = $('st-warn');
     if (w) w.innerHTML = spec.stations.length >= 2 ? warnsHtml(designCheck(), 'La piezométrica de diseño queda entre la presión mínima y la MAOP en todo el trazado.') : '';
   }
+  function plantSum(s) {
+    const pl = s.plant || {}; const r = G.plantRate(pl);
+    const t = { ptc: 'PTC', almacenaje: 'Almacenaje', entrega: 'Entrega' }[pl.tipo] || 'Planta';
+    return `${t} · ${r >= 0 ? 'aporta' : 'toma'} ${n0(Math.abs(r))} m³/h · ${n0(pl.capM3)} m³`;
+  }
   function stCard(s) {
+    if (s.kind === 'planta' && !s.plant) s.plant = { tipo: 'ptc', rate: 120, prod: 120, capM3: 20000, levelPct: 50, modo: 'recibe', on: true, bsw: 0.3 };
     const open = openSt.has(s.uid);
     const k = s.kind;
     const pumps = s.pumps;
-    const sum = k === 'cabecera' || k === 'bombeo' ? (pumps ? `${pumps.online}+${pumps.mains - pumps.online} bombas × ${fmt(pumps.headKg)} kg/cm² · desc. ${fmt(s.pDescSp)}` : 'sin bombas') : k === 'reductora' ? `SP salida ${fmt(s.pDescSp)} kg/cm²` : k === 'inyeccion' ? `${n0(s.injection && s.injection.rate)} m³/h` : k === 'terminal' ? `llegada ${fmt(s.pAspSp)} kg/cm²` : '';
+    const sum = k === 'cabecera' || k === 'bombeo' ? (pumps ? `${pumps.online}+${pumps.mains - pumps.online} bombas × ${fmt(pumps.headKg)} kg/cm² · desc. ${fmt(s.pDescSp)}` : 'sin bombas') : k === 'reductora' ? `SP salida ${fmt(s.pDescSp)} kg/cm²` : k === 'inyeccion' ? `${n0(s.injection && s.injection.rate)} m³/h` : k === 'planta' ? plantSum(s) : k === 'terminal' ? `llegada ${fmt(s.pAspSp)} kg/cm²` : '';
     let h = `<article class="b-st"><div class="b-st-h" data-toggle="${s.uid}" role="button" tabindex="0" aria-expanded="${open}"><b>${esc(s.short)}</b><span>${esc(s.name)}</span><span class="b-tag k-${k}">${G.KINDS[k]}${s.altHead ? ' · cabecera alternativa' : ''}</span><span class="b-tag">PK ${fmt(s.pk)}</span><span class="b-sum">${esc(sum)}</span></div>`;
     if (!open) return h + '</article>';
     const P = 'stations.' + s.uid + '.';
@@ -737,14 +749,18 @@
         <p class="b-sub">Boosters de aspiración</p><div class="b-grid">${F('Boosters instalados', P + 'pumps.boosters', 'num', { step: 1, min: 0, max: 4 })}${F('En línea', P + 'pumps.boostersOnline', 'num', { step: 1, min: 0, max: 4 })}${F('Aporte a la aspiración (kg/cm²)', P + 'pumps.boosterKg', 'num', { step: 0.5, min: 0 })}</div>
         <p class="b-sub">Control</p><div class="b-grid">${k === 'bombeo' ? F('SP de aspiración (kg/cm²)', P + 'pAspSp', 'num', { step: 0.5, min: 0.5 }) : ''}${F('SP de descarga · PID (kg/cm²)', P + 'pDescSp', 'num', { step: 0.5, min: 1, max: G.pipeCalc(spec.pipe).maop })}${F('Inyección de DRA', P + 'dra', 'bool')}${k === 'bombeo' ? F('Cabecera alternativa si falla la cabecera', P + 'altHead', 'bool') : ''}${F('Tanque de la estación (m³)', P + 'tankM3', 'num', { step: 500, min: 0, hint: k === 'bombeo' ? 'necesario para ser cabecera alternativa' : '' })}</div>`;
     }
+    if (k === 'planta') {
+      const pl = s.plant;
+      h += `<p class="b-sub">Planta</p><div class="b-grid">${F('Tipo de planta', P + 'plant.tipo', 'select', { options: Object.entries(G.PLANT_T) })}${pl.tipo === 'almacenaje' ? F('Modo inicial', P + 'plant.modo', 'select', { options: [['recibe', 'Recibe de la línea'], ['despacha', 'Despacha a la línea']] }) : ''}${F(pl.tipo === 'entrega' ? 'Caudal que toma (m³/h)' : pl.tipo === 'almacenaje' ? 'Caudal de recibo o despacho (m³/h)' : 'Caudal que aporta (m³/h)', P + 'plant.rate', 'num', { step: 5, min: 0 })}${pl.tipo === 'ptc' ? F('Producción que entra a la planta (m³/h)', P + 'plant.prod', 'num', { step: 5, min: 0 }) : ''}${pl.tipo === 'entrega' ? F('Consumo del cliente (m³/h)', P + 'plant.prod', 'num', { step: 5, min: 0 }) : ''}${F('Capacidad de tanques (m³)', P + 'plant.capM3', 'num', { step: 500, min: 100 })}${F('Nivel inicial (%)', P + 'plant.levelPct', 'num', { step: 5, min: 0, max: 100 })}${pl.tipo === 'ptc' ? F('BS&W de salida (%)', P + 'plant.bsw', 'num', { step: 0.1, min: 0, max: 5 }) : ''}</div><p class="b-note">${pl.tipo === 'ptc' ? 'La PTC recibe la producción de los yacimientos, la trata y la bombea a la línea. Si aporta menos de lo que produce, sus tanques se llenan.' : pl.tipo === 'almacenaje' ? 'La playa de tanques recibe crudo de la línea o lo despacha a la línea; en el SCADA se cambia el modo y el caudal.' : 'La entrega deriva crudo de la línea a un cliente o refinería; sus tanques se vacían al ritmo del consumo.'} En el simulador se opera desde SCADA › Plantas.</p>`;
+    }
     if (k === 'reductora') h += `<div class="b-grid">${F('SP de presión de salida (kg/cm²)', P + 'pDescSp', 'num', { step: 0.5, min: 1 })}</div>`;
     if (k === 'terminal') h += `<div class="b-grid">${F('Presión de llegada objetivo (kg/cm²)', P + 'pAspSp', 'num', { step: 0.5, min: 1 })}</div><p class="b-note">Los tanques y el destino se configuran en el paso Destino.</p>`;
     if (k !== 'reductora') {
       if (!s.meters) s.meters = { usm: 2, pd: 1, prover: true, lact: false };
       h += `<p class="b-sub">Medición</p><div class="b-grid">${F('Ultrasónicos (USM)', P + 'meters.usm', 'num', { step: 1, min: 0, max: 4 })}${F('Desplazamiento positivo (PD)', P + 'meters.pd', 'num', { step: 1, min: 0, max: 2 })}${F('Prover para calibración', P + 'meters.prover', 'bool')}${F('Unidad LACT (custody)', P + 'meters.lact', 'bool')}</div>`;
     }
-    if (k !== 'reductora') h += `<div class="b-row">${F('Trampa de pig (lanzadora/receptora)', P + 'pigTrap', 'bool')}</div>`;
-    if (k !== 'terminal' && k !== 'reductora') {
+    if (k !== 'reductora' && k !== 'planta') h += `<div class="b-row">${F('Trampa de pig (lanzadora/receptora)', P + 'pigTrap', 'bool')}</div>`;
+    if (k !== 'terminal' && k !== 'reductora' && k !== 'planta') {
       const inj = s.injection;
       h += `<p class="b-sub">Inyección lateral</p>`;
       if (inj) h += `<div class="b-grid">${F('Origen', P + 'injection.name', 'str')}${F('Caudal (m³/h)', P + 'injection.rate', 'num', { step: 1, min: 0 })}${F('Titular', P + 'injection.owner', 'select', { options: [['Propia', 'Propia'], ['Tercero', 'Tercero']] })}</div><div class="b-row"><button type="button" class="b-btn b-btn-sm" data-noinj="${s.uid}">Quitar inyección</button></div>`;
@@ -785,7 +801,7 @@
   };
   REFRESH.estaciones = (path, kind) => {
     stProf();
-    if (kind === 'change' && /\.(kind|pk|altHead)$/.test(path)) { const s = getPath(spec, path.split('.').slice(0, 2).join('.')); if (s && /kind$/.test(path)) { s.pumps = null; G.sizeAll({ ...spec, stations: [s] }); } stList(); }
+    if (kind === 'change' && /\.(kind|pk|altHead|plant\.tipo)$/.test(path)) { const s = getPath(spec, path.split('.').slice(0, 2).join('.')); if (s && /\.kind$/.test(path)) { s.pumps = null; G.sizeAll({ ...spec, stations: [s] }); } stList(); }
     renderSteps();
   };
   $('ed-pane').addEventListener('click', (e) => {
@@ -842,7 +858,7 @@
     const el = $('ds-out');
     if (!el) return;
     const d = spec.dest;
-    const inj = spec.stations.reduce((a, s) => a + (s.injection ? Number(s.injection.rate) || 0 : 0), 0);
+    const inj = spec.stations.reduce((a, s) => a + (s.kind === 'planta' ? G.plantRate(s.plant) : s.injection ? Number(s.injection.rate) || 0 : 0), 0);
     const qr = (Number(spec.ops.qDesignM3h) || 0) + inj;
     const cap = d.tanks * d.tankM3;
     const usable = d.tanks * d.tankM3 * (0.875 - 0.2);

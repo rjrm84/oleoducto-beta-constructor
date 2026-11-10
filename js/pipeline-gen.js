@@ -31,7 +31,10 @@
   const PA_PER_KG = 1e5; // mismo criterio que el motor
 
   const DRIVES = { directa: 'Motor eléctrico directo', variador: 'Motor con variador', turbina: 'Turbina a gas', diesel: 'Motor diésel' };
-  const KINDS = { cabecera: 'Cabecera', bombeo: 'Estación de bombeo', reductora: 'Reductora de presión', inyeccion: 'Nodo de inyección', terminal: 'Terminal' };
+  const KINDS = { cabecera: 'Cabecera', bombeo: 'Estación de bombeo', reductora: 'Reductora de presión', inyeccion: 'Nodo de inyección', planta: 'Planta (PTC, almacenaje, entrega)', terminal: 'Terminal' };
+  const PLANT_T = { ptc: 'Planta de tratamiento de crudo (aporta a la línea)', almacenaje: 'Playa de tanques (recibe o despacha)', entrega: 'Entrega a cliente o refinería (toma de la línea)' };
+  // caudal con signo de una planta: + aporta a la línea, − toma de la línea
+  function plantRate(pl) { if (!pl) return 0; const r = Math.max(0, Number(pl.rate) || 0); if (pl.on === false) return 0; return pl.tipo === 'entrega' || (pl.tipo === 'almacenaje' && pl.modo !== 'despacha') ? -r : r; }
   const DEST = { refineria: 'Refinería', parque: 'Parque de tanques', puerto: 'Puerto de carga' };
 
   // ---------- utilidades ----------
@@ -207,16 +210,17 @@
   const uid = () => 's' + Date.now().toString(36) + (uidN++).toString(36);
   function letters(n) { let s = ''; n += 1; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
   function newStation(kind, pk, k) {
-    const nm = kind === 'cabecera' ? 'Cabecera' : kind === 'terminal' ? 'Terminal' : kind === 'reductora' ? 'Reductora ' + k : kind === 'inyeccion' ? 'Inyección ' + k : 'Estación ' + k;
-    const sh = kind === 'cabecera' ? 'CAB' : kind === 'terminal' ? 'TER' : kind === 'reductora' ? 'RD' + k : kind === 'inyeccion' ? 'IN' + k : 'EB' + k;
+    const nm = kind === 'cabecera' ? 'Cabecera' : kind === 'terminal' ? 'Terminal' : kind === 'reductora' ? 'Reductora ' + k : kind === 'inyeccion' ? 'Inyección ' + k : kind === 'planta' ? 'Planta ' + k : 'Estación ' + k;
+    const sh = kind === 'cabecera' ? 'CAB' : kind === 'terminal' ? 'TER' : kind === 'reductora' ? 'RD' + k : kind === 'inyeccion' ? 'IN' + k : kind === 'planta' ? 'PL' + k : 'EB' + k;
     return {
       uid: uid(), name: nm, short: sh, pk: +(+pk).toFixed(1), kind, altHead: false,
       pumps: null, pAspSp: null, pDescSp: null,
-      meters: { usm: kind === 'reductora' ? 0 : 2, pd: kind === 'reductora' ? 0 : 1, prover: kind !== 'reductora', lact: kind === 'cabecera' || kind === 'terminal' || kind === 'inyeccion' },
+      meters: { usm: kind === 'reductora' ? 0 : 2, pd: kind === 'reductora' ? 0 : 1, prover: kind !== 'reductora', lact: kind === 'cabecera' || kind === 'terminal' || kind === 'inyeccion' || kind === 'planta' },
       pigTrap: kind === 'cabecera' || kind === 'terminal' || kind === 'bombeo',
       tankM3: kind === 'cabecera' ? 15000 : 0,
       injection: kind === 'inyeccion' ? { name: 'Yacimiento ' + k, rate: 30, owner: 'Tercero' } : null,
       dra: kind === 'cabecera' || kind === 'bombeo',
+      plant: kind === 'planta' ? { tipo: 'ptc', rate: 120, prod: 120, capM3: 20000, levelPct: 50, modo: 'recibe', on: true, bsw: 0.3 } : null,
     };
   }
   /** Completa bombas y set points de cada estación según la hidráulica de diseño. */
@@ -242,7 +246,7 @@
   function autoDesign(spec, keepUser) {
     const res = autoStations(spec);
     const L = spec.lengthKm;
-    const user = keepUser ? spec.stations.filter((s) => s.kind === 'inyeccion') : [];
+    const user = keepUser ? spec.stations.filter((s) => s.kind === 'inyeccion' || s.kind === 'planta') : [];
     const head = spec.stations.find((s) => s.kind === 'cabecera') || newStation('cabecera', 0, 0);
     const term = spec.stations.find((s) => s.kind === 'terminal') || newStation('terminal', L, 0);
     head.pk = 0; term.pk = +L.toFixed(1);
@@ -317,7 +321,7 @@
     const sts = spec.stations.slice().sort((a, b) => a.pk - b.pk);
     const hasAlt = sts.some((s) => s.altHead && s.kind === 'bombeo');
     // ids internos que entiende el motor
-    let nb = 0, nr = 0, ni = 0;
+    let nb = 0, nr = 0, ni = 0, np = 0;
     const idOf = new Map();
     for (const s of sts) {
       let id;
@@ -326,10 +330,11 @@
       else if (s.altHead && s.kind === 'bombeo' && !idOf.has('__cd')) { id = 'cd'; idOf.set('__cd', true); }
       else if (s.kind === 'reductora') id = 'r' + (++nr);
       else if (s.kind === 'inyeccion') id = 'i' + (++ni);
+      else if (s.kind === 'planta') id = 'pl' + (++np);
       else id = 'e' + (++nb);
       idOf.set(s.uid, id);
     }
-    const injTotal = sts.reduce((a, s) => a + (s.injection && s.injection.rate > 0 ? Number(s.injection.rate) : 0), 0);
+    const injTotal = sts.reduce((a, s) => a + (s.kind !== 'planta' && s.injection && s.injection.rate > 0 ? Number(s.injection.rate) : 0) + (s.kind === 'planta' ? plantRate(s.plant) : 0), 0);
     const qRecv = (Number(ops.qDesignM3h) || 0) + injTotal;
     const prof = spec.profile && spec.profile.length ? spec.profile : [{ pk: 0, elev: 0 }, { pk: L, elev: 0 }];
     const simp = simplifyProfile(prof, Math.max(3, (Math.max(...prof.map((p) => p.elev)) - Math.min(...prof.map((p) => p.elev))) / 200), 420);
@@ -349,7 +354,7 @@
         pkKm: +(+s.pk).toFixed(1),
         elevationMsnm: Math.round(elevAt(prof, s.pk)),
         lat: +ll[0].toFixed(5), lon: +ll[1].toFixed(5),
-        type: s.kind === 'cabecera' ? 'cabecera' : s.kind === 'terminal' ? 'terminal' : s.kind === 'reductora' ? 'regulating' : s.kind === 'inyeccion' ? 'injection' : 'pumping',
+        type: s.kind === 'cabecera' ? 'cabecera' : s.kind === 'terminal' ? 'terminal' : s.kind === 'reductora' ? 'regulating' : s.kind === 'inyeccion' ? 'injection' : s.kind === 'planta' ? 'plant' : 'pumping',
         kind: s.kind,
         roles: [],
         pAspMinKgCm2: Math.max(1, (Number(ops.pAspSpKg) || 5) - 1),
@@ -380,7 +385,11 @@
       if (s.pDescSp != null && s.kind !== 'terminal') st.pDescSpKgCm2 = Number(s.pDescSp);
       if (s.pAspSp != null) st.pAspSpKgCm2 = Number(s.pAspSp);
       if (s.kind === 'reductora') st.flowThrottlePct = 100;
-      if (s.injection && Number(s.injection.rate) > 0) {
+      if (s.kind === 'planta' && s.plant) {
+        const pl = s.plant, cap = Math.max(100, Number(pl.capM3) || 20000), r = Math.max(0, Number(pl.rate) || 0);
+        st.plant = { tipo: pl.tipo || 'ptc', modo: pl.modo || 'recibe', on: pl.on !== false, rateM3h: r, maxM3h: Math.round(r * 1.5 + 20), prodM3h: Math.max(0, Number(pl.prod != null ? pl.prod : r) || 0), capM3: cap, volM3: Math.round(cap * Math.max(0, Math.min(100, Number(pl.levelPct) || 50)) / 100), bsw: Number(pl.bsw) || 0, tk: 'TK-' + tagBase(i) };
+        st.injection = { enabled: true, rateM3h: plantRate(pl), maxM3h: st.plant.maxM3h, label: s.name, plant: true };
+      } else if (s.injection && Number(s.injection.rate) > 0) {
         const r = Number(s.injection.rate);
         st.injections.push({ id: `${id}-iny`, name: s.injection.name || ('Inyección ' + st.shortName), owner: s.injection.owner || 'Tercero', enabled: true, mode: 'continuous', rateM3h: r, maxM3h: Math.round(r * 1.5 + 5), manualOverride: false, manualRateM3h: r, datosBombeoRateM3h: r });
         st.injection = { enabled: true, rateM3h: r, maxM3h: Math.round(r * 1.5 + 5), label: s.injection.name };
@@ -568,7 +577,7 @@
   }
 
   global.PIPEGEN = {
-    NPS, GRADES, ANSI, DRIVES, KINDS, DEST, BAR_TO_KG,
+    NPS, GRADES, ANSI, DRIVES, KINDS, PLANT_T, plantRate, DEST, BAR_TO_KG,
     hav, routeLength, pointAt, samplePoints, elevAt, simplifyProfile,
     pipeCalc, frictionF, hyd, opLimit, autoStations, autoDesign, sizeAll, sizePumps, autoValves,
     newStation, defaultSpec, normalize, generateConfig, lib, LIB_KEY, PIG_TYPES,

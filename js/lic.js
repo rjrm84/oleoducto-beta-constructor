@@ -20,8 +20,14 @@
       { id: 'm6', label: '6 meses', meses: 6, precio: 'USD 354', nota: '≈ USD 59/mes' },
       { id: 'm12', label: '1 año', meses: 12, precio: 'USD 640', nota: '≈ USD 53/mes · ahorrás 23 %' },
     ],
+    empresa: [
+      { id: 'm1', label: '1 mes', meses: 1, precio: 'USD 149', nota: '' },
+      { id: 'm3', label: '3 meses', meses: 3, precio: 'USD 399', nota: '≈ USD 133/mes' },
+      { id: 'm6', label: '6 meses', meses: 6, precio: 'USD 749', nota: '≈ USD 125/mes' },
+      { id: 'm12', label: '1 año', meses: 12, precio: 'USD 1.390', nota: '≈ USD 116/mes · ahorrás 22 %' },
+    ],
     // links de pago opcionales (Mercado Pago u otro). Vacío = se contrata por WhatsApp o mail.
-    pago: { individual: {}, institucional: {} },
+    pago: { individual: {}, institucional: {}, empresa: {} },
   };
   const PUB = { kty: 'EC', crv: 'P-256', x: 'TXvUHT1tElEG9iFDPvE_lcSuF7zefnvTz6R2N0tFLeY', y: 'wuWtHBdT5EOnXEDA9gBWxKW2rA8cwaVvuigfm0rTI6Q', ext: true, key_ops: ['verify'] };
   const K = { lic: 'ob.lic', al: 'ob.lic.alumnos' };
@@ -48,7 +54,7 @@
   }
 
   // ---------- qué incluye cada plan ----------
-  const PAID = ['individual', 'institucional', 'curso', 'admin'];
+  const PAID = ['individual', 'institucional', 'empresa', 'curso', 'admin'];
   const FEAT = {
     'scada:control': 'pro', 'scada:equipos': 'pro', 'scada:arranque': 'pro', 'scada:cierres': 'pro', 'scada:custody': 'pro',
     'fallas': 'pro', 'turno': 'pro', 'certificado': 'pro', 'constructor:simular': 'pro',
@@ -62,12 +68,12 @@
   const L = {
     lic: null, alumnos: null, ready: false, CFG, verify,
     plan() { return this.lic ? this.lic.plan : 'gratis'; },
-    planName() { return ({ gratis: 'Gratis', individual: 'Individual', institucional: 'Institucional', curso: 'Alumno', admin: 'Administrador' })[this.plan()]; },
+    planName() { return ({ gratis: 'Gratis', individual: 'Individual', institucional: 'Institucional', empresa: 'Empresa', curso: this.lic && this.lic.via === 'empresa' ? 'Personal' : 'Alumno', admin: 'Administrador' })[this.plan()]; },
     can(f) {
       const need = FEAT[f];
       if (!need) return true;
       const p = this.plan();
-      if (need === 'inst') return p === 'institucional' || p === 'admin';
+      if (need === 'inst') return p === 'institucional' || p === 'empresa' || p === 'admin';
       return PAID.includes(p);
     },
     async activate(code) {
@@ -78,14 +84,14 @@
       if (!p) return { ok: false, error: 'El código no es válido o ya venció. Copialo completo, sin espacios.' };
       if (p.plan === 'curso' && this.lic && this.lic.plan !== 'curso') return { ok: true, lic: this.lic, kept: true };
       this.lic = p; store.set(K.lic, parts[0]);
-      if (parts[1] && await verify(parts[1])) { this.alumnos = parts[1]; store.set(K.al, parts[1]); } else if (p.plan !== 'institucional') { this.alumnos = null; store.del(K.al); }
+      if (parts[1] && await verify(parts[1])) { this.alumnos = parts[1]; store.set(K.al, parts[1]); } else if (p.plan !== 'institucional' && p.plan !== 'empresa') { this.alumnos = null; store.del(K.al); }
       emit();
       return { ok: true, lic: p };
     },
     remove() { this.lic = null; this.alumnos = null; store.del(K.lic); store.del(K.al); emit(); },
     lockHtml(f, extra) {
       const inst = FEAT[f] === 'inst';
-      return `<div class="lic-lock"><div class="lic-lock-i">🔒</div><h3>${esc(FNAME[f] || 'Función')} · ${inst ? 'licencia institucional' : 'licencia Individual o Institucional'}</h3><p>${extra ? esc(extra) + ' ' : ''}En la versión gratuita podés usar la vista 3D, la sala de control, el desafío del día y las pantallas principales del SCADA.</p><button type="button" class="x-btn x-btn-hot" data-licplans="1">Ver planes</button></div>`;
+      return `<div class="lic-lock"><div class="lic-lock-i">🔒</div><h3>${esc(FNAME[f] || 'Función')} · ${inst ? 'licencia Institucional o Empresa' : 'licencia Individual, Institucional o Empresa'}</h3><p>${extra ? esc(extra) + ' ' : ''}En la versión gratuita podés usar la vista 3D, la sala de control, el desafío del día y las pantallas principales del SCADA.</p><button type="button" class="x-btn x-btn-hot" data-licplans="1">Ver planes</button></div>`;
     },
     openPlans() { openModal(); },
   };
@@ -108,18 +114,19 @@
     c.innerHTML = p === 'gratis' ? '<b>Gratis</b><span>Ver planes</span>' : `<b>${esc(L.planName())}</b><span>hasta ${fdate(L.lic.exp)}</span>`;
   }
   const ROWS = [
-    ['Vista 3D, sala de control y desafío del día', '✔', '✔', '✔'],
-    ['SCADA: principal, P&ID, integridad, terminal, medición, alarmas', '✔', '✔', '✔'],
-    ['Eventos rápidos de ejemplo', '✔', '✔', '✔'],
-    ['Catálogo de fallas programables con pasos del supervisor', '—', '✔', '✔'],
-    ['Control PID: SP tracking, A/M, rampas, variadores', '—', '✔', '✔'],
-    ['SCADA de equipos: eléctrica, filtros, lubricación, sumideros', '—', '✔', '✔'],
-    ['Reinicio y arranque automático de línea', '—', '✔', '✔'],
-    ['Turno de 12 h y constructor de ductos propios', '—', '✔', '✔'],
-    ['Rendir evaluaciones del docente', '✔', '✔', '✔'],
-    ['Licencia para todos los alumnos con un link', '—', '—', '✔'],
-    ['Panel docente: preguntas, desafíos, evaluaciones, reportes y Excel', '—', '—', '✔'],
-    ['Acompañamiento en la primera clase', '—', '—', '✔'],
+    ['Vista 3D, sala de control y desafío del día', '✔', '✔', '✔', '✔'],
+    ['SCADA: principal, P&ID, integridad, terminal, medición, alarmas', '✔', '✔', '✔', '✔'],
+    ['Eventos rápidos de ejemplo', '✔', '✔', '✔', '✔'],
+    ['Catálogo de fallas programables con pasos del supervisor', '—', '✔', '✔', '✔'],
+    ['Control PID: SP tracking, A/M, rampas, variadores', '—', '✔', '✔', '✔'],
+    ['SCADA de equipos: eléctrica, filtros, lubricación, sumideros', '—', '✔', '✔', '✔'],
+    ['Reinicio y arranque automático de línea', '—', '✔', '✔', '✔'],
+    ['Constructor: ductos propios con plantas, tanques y entregas', '—', '✔', '✔', '✔'],
+    ['Rendir evaluaciones', '✔', '✔', '✔', '✔'],
+    ['Licencia para alumnos o personal con un link', '—', '—', '✔', '✔'],
+    ['Panel de evaluación: preguntas, desafíos, reportes y Excel', '—', '—', '✔', '✔'],
+    ['Su ducto real modelado por nosotros (servicio)', '—', '—', '—', '✔'],
+    ['Acompañamiento y soporte', '—', '—', 'Primera clase', 'Prioritario'],
   ];
   function planCards(list, kind) {
     return `<div class="lic-plist">${list.map((x) => { const pay = CFG.pago[kind] && CFG.pago[kind][x.id]; return `<div class="lic-pl${x.meses === 12 ? ' best' : ''}"><b>${esc(x.label)}</b><span class="lic-pp">${esc(x.precio)}</span>${x.nota ? `<small>${esc(x.nota)}</small>` : ''}${pay ? `<a class="lic-pay" href="${esc(pay)}" target="_blank" rel="noopener">Pagar</a>` : ''}</div>`; }).join('')}</div>`;
@@ -136,8 +143,9 @@
         <div class="lic-col${p === 'gratis' ? ' cur' : ''}"><p class="lic-pn">Gratis</p><p class="lic-pp">$ 0</p><ul><li>Vista 3D y sala de control</li><li>Desafío del día</li><li>Pantallas principales del SCADA</li><li>Eventos rápidos de ejemplo</li><li>Rendir evaluaciones del docente</li></ul>${p === 'gratis' ? '<p class="lic-tag">Tu plan actual</p>' : ''}</div>
         <div class="lic-col hot${p === 'individual' ? ' cur' : ''}"><p class="lic-badge">Para estudiantes y operadores</p><p class="lic-pn">⭐ Individual</p>${planCards(CFG.individual, 'individual')}<p class="lic-m">Todo lo gratis, más:</p><ul><li>Catálogo completo de fallas programables</li><li>Control PID con SP tracking y rampas</li><li>SCADA de equipos y tanques sumidero</li><li>Reinicio y arranque automático de línea</li><li>Turno de 12 h y constructor de ductos</li></ul><a class="x-btn x-btn-hot lic-btn" href="${wa('Hola, quiero la licencia Individual de Oleoducto Beta')}" target="_blank" rel="noopener">Contratar por WhatsApp</a></div>
         <div class="lic-col${p === 'institucional' ? ' cur' : ''}"><p class="lic-pn">🏫 Institucional</p>${planCards(CFG.institucional, 'institucional')}<p class="lic-m">Todo lo de Individual, más:</p><ul><li><b>Licencia para todos los alumnos</b> con un link</li><li><b>Panel docente</b>: banco de preguntas, desafíos en el simulador y evaluaciones</li><li>Reportes por alumno y exportación a Excel</li><li>Acompañamiento en la primera clase</li></ul><a class="x-btn lic-btn" href="${wa('Hola, quiero la licencia Institucional de Oleoducto Beta para mi institución')}" target="_blank" rel="noopener">Contratar por WhatsApp</a><p class="lic-m">Valores desde, según cantidad de alumnos y sedes.</p></div>
+        <div class="lic-col${p === 'empresa' ? ' cur' : ''}"><p class="lic-badge">Para operadoras y contratistas</p><p class="lic-pn">🏭 Empresa</p>${planCards(CFG.empresa, 'empresa')}<p class="lic-m">Todo lo de Institucional, más:</p><ul><li><b>Su ducto y sus plantas</b> sobre el mapa real, modelados por nosotros</li><li>Capacitación y evaluación del personal con un link</li><li>Simulacros de fallas y arranques con su propia línea</li><li>Soporte prioritario</li></ul><a class="x-btn lic-btn" href="${wa('Hola, quiero la licencia Empresa de Oleoducto Beta para simular nuestro ducto')}" target="_blank" rel="noopener">Contratar por WhatsApp</a><p class="lic-m">Valores desde, por sitio. El modelado del ducto real se cotiza aparte según su complejidad.</p></div>
       </div>
-      <details class="lic-cmp"><summary>Comparar todo en una tabla</summary><table><tr><th></th><th>Gratis</th><th>Individual</th><th>Institucional</th></tr>${ROWS.map((r) => `<tr><td>${esc(r[0])}</td><td>${r[1]}</td><td><b>${r[2]}</b></td><td><b>${r[3]}</b></td></tr>`).join('')}</table></details>
+      <details class="lic-cmp"><summary>Comparar todo en una tabla</summary><table><tr><th></th><th>Gratis</th><th>Individual</th><th>Institucional</th><th>Empresa</th></tr>${ROWS.map((r) => `<tr><td>${esc(r[0])}</td><td>${r[1]}</td><td><b>${r[2]}</b></td><td><b>${r[3]}</b></td><td><b>${r[4]}</b></td></tr>`).join('')}</table></details>
       <p class="lic-m">${esc(CFG.tc)} Para contratar: <a href="${wa('Hola, quiero información de Oleoducto Beta')}" target="_blank" rel="noopener">WhatsApp ${esc(C.waTxt)}</a> o <a href="mailto:${esc(C.mail)}">${esc(C.mail)}</a>. Al confirmar el pago te enviamos el código de licencia o un link que la activa.</p>
       ${L.lic ? '<button type="button" class="x-btn" data-licrm="1">Quitar la licencia de este dispositivo</button>' : ''}
       <details class="lic-act" ${L.lic ? '' : 'open'}><summary>Ya pagué: activar la licencia en este dispositivo</summary><div class="lic-row"><textarea id="lic-code" rows="2" placeholder="Pegá el código de licencia o el link que recibiste"></textarea><button type="button" class="x-btn x-btn-hot" data-licact="1">Activar</button></div><p class="lic-msg" id="lic-msg"></p></details>
@@ -167,7 +175,7 @@
     const t = store.get(K.lic);
     if (t) { L.lic = await verify(t); if (!L.lic) store.del(K.lic); }
     const al = store.get(K.al);
-    if (al && L.lic && L.lic.plan === 'institucional' && await verify(al)) L.alumnos = al;
+    if (al && L.lic && (L.lic.plan === 'institucional' || L.lic.plan === 'empresa') && await verify(al)) L.alumnos = al;
     try {
       const u = new URL(location.href), q = u.searchParams.get('licencia');
       if (q) {

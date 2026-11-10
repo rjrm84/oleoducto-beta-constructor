@@ -403,6 +403,7 @@
     if (LIC() && LIC().on) LIC().on(() => { nav(); render(true); });
     function nav() {
       const items = [['principal', 'Principal'], ['estacion', 'Estación (P&ID)'], ['control', 'Control PID'], ['arranque', 'Reinicio y arranque'], ['equipos', 'Equipos'], ['integridad', 'Integridad'], ['terminal', 'Terminal ' + TN], ['medicion', 'Medición'], ['cierres', 'Cierres OMNI'], ['custody', 'Custody'], ['alarmlog', 'Hist. alarmas'], ['eventos', 'Eventos y fallas']].concat(CUST ? [] : [['clasica', 'Consola clásica']]).filter(([k]) => (k !== 'equipos' || equip) && (k !== 'control' || pidfp));
+      if (plantas) items.splice(5, 0, ['plantas', 'Plantas']);
       $('ing-nav').innerHTML = items.map(([k, t]) => `<button type="button" class="${k === sub ? 'on' : ''}" data-sub="${k}">${t}${LIC() && !LIC().can('scada:' + k) ? ' <i class="lic-lk">🔒</i>' : ''}</button>`).join('');
     }
     function setSub(k) {
@@ -709,7 +710,7 @@
     function render(force) {
       if (sub === 'clasica') return;
       if (!force && (root.contains(document.activeElement) && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT'))) return;
-      const html = LIC() && !LIC().can('scada:' + sub) ? LIC().lockHtml('scada:' + sub) : sub === 'arranque' ? arranqueView() : sub === 'control' && pidfp ? controlView() : sub === 'equipos' && equip ? equip.render() : ext && ext.render[sub] ? ext.render[sub]() : sub === 'principal' ? principal() : sub === 'estacion' ? pid() : sub === 'medicion' ? medicion() : eventos();
+      const html = LIC() && !LIC().can('scada:' + sub) ? LIC().lockHtml('scada:' + sub) : sub === 'plantas' && plantas ? plantas.render() : sub === 'arranque' ? arranqueView() : sub === 'control' && pidfp ? controlView() : sub === 'equipos' && equip ? equip.render() : ext && ext.render[sub] ? ext.render[sub]() : sub === 'principal' ? principal() : sub === 'estacion' ? pid() : sub === 'medicion' ? medicion() : eventos();
       if (sub === 'medicion' && !force && proving) {
         // no pisar el panel del prover mientras corre
         const keep = $('me-prover');
@@ -755,6 +756,7 @@
       if (equip && sub === 'equipos') { const tq = e.target.closest(equip.selector); if (tq && equip.click(tq)) { render(true); return; } }
       if (ext) { const tx = e.target.closest(ext.selector); if (tx && ext.click(tx)) { render(true); return; } }
       if (pidfp && sub === 'control') { const tp = e.target.closest(pidfp.selector); if (tp && pidfp.click(tp, stSel)) { render(true); return; } }
+      if (plantas && sub === 'plantas') { const tq2 = e.target.closest(plantas.selector); if (tq2 && plantas.click(tq2)) { render(true); return; } }
       if (faults && sub === 'eventos') { const tf = e.target.closest(faults.selector); if (tf && faults.click(tf)) { render(true); return; } }
       const ar = e.target.closest('[data-ar],[data-arstart],[data-arstop],[data-arpid]');
       if (ar) {
@@ -842,6 +844,7 @@
       if (e.target.dataset && e.target.dataset.arsel) { const [sid, pid] = e.target.dataset.arsel.split(':'); (arrSel[sid] = arrSel[sid] || {})[pid] = e.target.checked; e.target.blur(); render(true); return; }
       if (e.target.id === 'ar-auto') { S().autoRamp = e.target.checked; e.target.blur(); render(true); return; }
       if (pidfp && sub === 'control' && pidfp.change(e.target, stSel)) { if (e.target.blur) e.target.blur(); render(true); return; }
+      if (plantas && sub === 'plantas' && plantas.change(e.target)) { e.target.blur(); render(true); return; }
       if (faults && faults.change(e.target)) { if (e.target.tagName === 'SELECT') e.target.blur(); render(true); return; }
       const c = e.target.closest('[data-pb]');
       if (c) sim.togglePlaybookCheck(c.dataset.pb);
@@ -853,6 +856,8 @@
     if (equip) equip.onStart = (sid, p) => { if (S().stationRamp && S().stationRamp.__init) return; if (auto) return; startRamp(`arranque de ${p.name} en ${sim.stationById(sid).shortName}`); };
     const pidfp = global.createPidFp ? global.createPidFp(app, { equip: () => equip, evLog, stv: (id) => stv(id), MAOP, QMAX }) : null;
     const faults = global.createFaults ? global.createFaults(app, { ev, evLog, equip: () => equip }) : null;
+    const plantas = global.createPlantas ? global.createPlantas(app, { evLog }) : null;
+    if (plantas && app.alarms && app.alarms.addSource) app.alarms.addSource(() => plantas.alarms());
     nav();
     setSub('principal');
 
@@ -871,6 +876,7 @@
       if (equip) equip.update();
       if (faults) faults.tick(dt);
       if (pidfp) pidfp.update();
+      if (plantas) plantas.update();
       if (dtH > 0) { globalStrategy(dtH); autoTick(dtH); }
       eventTick();
       provingStep();
