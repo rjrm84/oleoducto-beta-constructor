@@ -1,7 +1,7 @@
 /* Shell: vistas, barra superior, banner de alarmas, bienvenida y bucle común. */
 (function () {
   'use strict';
-  const VIEWS = ['vista-3d', 'scada', 'desafio', 'ingenieria'];
+  const VIEWS = ['vista-3d', 'scada', 'desafio', 'aula', 'ingenieria'];
   const $ = (id) => document.getElementById(id);
 
   const app = {
@@ -168,7 +168,18 @@
     app.scada = window.createScada(app);
     app.game = window.createGame(app);
     app.ing = window.createIng(app);
-    const start = location.hash ? location.hash.slice(1) : 'vista-3d';
+    app.aula = window.createAula ? window.createAula(app) : null;
+    if (/^#eval=/.test(location.hash)) { const ix = $('x-intro'); if (ix) ix.hidden = true; }
+    const start = /^#eval=/.test(location.hash) ? 'aula' : location.hash ? location.hash.slice(1) : 'vista-3d';
+    if (config._meta && config._meta.custom && window.OBLIC) {
+      const gate = () => {
+        let o = $('lic-gate');
+        if (window.OBLIC.can('constructor:simular')) { if (o) o.remove(); return; }
+        if (!o) { o = document.createElement('div'); o.id = 'lic-gate'; o.className = 'lic-gate'; document.body.appendChild(o); }
+        o.innerHTML = `<div class="lic-card">${window.OBLIC.lockHtml('constructor:simular', 'El constructor es libre para diseñar. Para simular y operar tu ducto necesitás una licencia.')}<p class="lic-m"><a href="${(window.OB_LINKS || {}).builder || 'constructor.html'}">Volver al constructor</a> · <a href="https://rjrm84.github.io/oleoducto-beta/">Usar el simulador Beta gratis</a></p></div>`;
+      };
+      window.OBLIC.whenReady.then(gate); window.OBLIC.on(gate);
+    }
     app.go(start);
     window.dispatchEvent(new CustomEvent('app-ready', { detail: app }));
     if (window.CUSTOM_ERROR) setTimeout(() => app.toast(window.CUSTOM_ERROR), 600);
@@ -187,6 +198,7 @@
       app.scada.update(dt, app.view === 'scada');
       app.game.update(dt);
       app.ing.update(dt, app.view === 'ingenieria');
+      if (app.aula) app.aula.update(dt);
       if (app.view3d) app.view3d.update(dt);
       requestAnimationFrame(frame);
     }

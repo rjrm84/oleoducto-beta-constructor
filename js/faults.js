@@ -226,7 +226,7 @@
       return false;
     }
     function reset() { scheduled.length = 0; active.forEach((a) => { if (!a.resolved) { try { resolve(a); } catch (err) { console.error(err); } } }); }
-    return { formHtml, activeHtml, click, change, tick, reset, fire, schedule, CAT, selector: '[data-fl],[data-flcancel],[data-flres]', hasScheduled: () => scheduled.length > 0 };
+    return { formHtml, activeHtml, click, change, tick, reset, fire, schedule, CAT, locOptions, active: () => active, scheduled: () => scheduled, selector: '[data-fl],[data-flcancel],[data-flres]', hasScheduled: () => scheduled.length > 0 };
   }
 
   global.createFaults = createFaults;

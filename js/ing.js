@@ -133,6 +133,95 @@
       arrSel[id] = {};
       if (n) app.toast(`${st.shortName}: ${n} bomba(s) en secuencia de arranque`);
     }
+    // v17: arranque automático de línea. Cabecera primero; cada estación aguas abajo arranca cuando le llega presión de aspiración.
+    let auto = null;
+    const AUTO_WAIT_H = 40 / 60, AUTO_HOLD_H = 1 / 60, AUTO_SETTLE_H = 2 / 60, AUTO_VALVE_H = 4 / 60;
+    const isB = (p) => (p.role || '').includes('booster');
+    function autoPick(id) {
+      const st = sim.stationById(id), pumps = st.pumps || [];
+      const mains = pumps.filter((p) => !isB(p));
+      const nServ = Math.max(1, mains.filter((p) => !p.reserve).length);
+      const nonVal = (pid) => (equip ? equip.pumpPermissives(id, pid).filter((x) => !x[1] && !/^Válvula de (aspiración|descarga)|^Presión de aspiración/.test(x[0])) : []);
+      const ok = mains.filter((p) => !p.online && !nonVal(p.id).length).sort((a, b) => (a.reserve ? 1 : 0) - (b.reserve ? 1 : 0));
+      const running = mains.filter((p) => p.online).length;
+      const bst = pumps.filter((p) => isB(p)), nB = bst.filter((p) => !p.reserve).length, bOn = bst.filter((p) => p.online).length;
+      const bOk = bst.filter((p) => !p.online).sort((a, b) => (a.reserve ? 1 : 0) - (b.reserve ? 1 : 0)).slice(0, Math.max(0, nB - bOn));
+      return bOk.concat(ok.slice(0, Math.max(0, nServ - running)));
+    }
+    function autoAbort(why) {
+      if (!auto) return;
+      evLog(`ARRANQUE AUTOMÁTICO ABORTADO: ${why}`); app.toast('Arranque automático abortado: ' + why);
+      auto = null;
+    }
+    function autoStart() {
+      const s = S();
+      if (auto) { autoAbort('cancelado por el operador'); return; }
+      const list = ST.filter((id) => (sim.stationById(id).pumps || []).length);
+      for (const id of list) {
+        if (!(s.failedStations[id] || (id === 'ph' && s.phFailed) || ev.elec[id])) continue;
+        const e = ev.elec[id];
+        if ((e && !e.ready) || rearm(id) === false) { app.toast(`No se puede iniciar: ${sim.stationById(id).shortName} no está lista para reiniciar`); evLog(`Arranque automático rechazado: ${sim.stationById(id).shortName} sin permisivos`); return; }
+      }
+      s.dispatchQ = dispQ();
+      s.globalFlowSetpoint = startQ(); s.flowTarget = null; s._rampWhy = null;
+      auto = { list, i: 0, phase: 'prep', t: 0, hold: 0, picked: [] };
+      evLog(`ARRANQUE AUTOMÁTICO DE LÍNEA: caudal de arranque ${fmt(s.globalFlowSetpoint, 0)} m³/h, orden ${list.map((id) => sim.stationById(id).shortName).join(' → ')}`);
+      app.toast('Arranque automático de línea en curso');
+    }
+    function autoTick(dtH) {
+      if (!auto) return;
+      const s = S(), id = auto.list[auto.i], st = sim.stationById(id);
+      for (let j = 0; j < auto.i; j++) { const k = auto.list[j]; if (s.failedStations[k] || (k === 'ph' && s.phFailed)) { autoAbort(`disparo de ${sim.stationById(k).shortName} durante la secuencia`); return; } }
+      auto.t += dtH;
+      if (auto.phase === 'prep') {
+        auto.picked = autoPick(id).map((p) => p.id);
+        if (!auto.picked.length && !(st.pumps || []).some((p) => p.online)) { autoAbort(`${st.shortName} sin bombas disponibles`); return; }
+        if (equip) {
+          if (equip.stValvePos(id, 'in') != null && equip.stValvePos(id, 'in') < 0.95) equip.setStValve(id, 'in', true);
+          if (equip.stValvePos(id, 'out') != null && equip.stValvePos(id, 'out') < 0.95) equip.setStValve(id, 'out', true);
+          for (const pid of auto.picked) { const p = st.pumps.find((q) => q.id === pid); if (isB(p)) continue; if (equip.sucPos(id, pid) < 0.95) equip.setSuc(id, pid, true); if (equip.movPos(id, pid) > 0.05) equip.setMov(id, pid, false); }
+        }
+        auto.phase = 'wait'; auto.t = 0; auto.hold = 0;
+        if (auto.i > 0) evLog(`Arranque automático: ${st.shortName} esperando presión de aspiración`);
+        return;
+      }
+      if (auto.phase === 'wait') {
+        const thr = Math.max(2, st.pAspMinKgCm2 || 3);
+        const pIn = s.pressuresIn[id] || 0;
+        auto.hold = auto.i === 0 || pIn >= thr ? auto.hold + dtH : 0;
+        const valvesOk = !equip || auto.picked.every((pid) => { const p = st.pumps.find((q) => q.id === pid); return isB(p) || (equip.sucPos(id, pid) > 0.95 && equip.movPos(id, pid) < 0.05); }) && !(equip.stationPermissives(id) || []).some((x) => !x[1] && /MOV de entrada/.test(x[0]));
+        if (auto.hold >= AUTO_HOLD_H && valvesOk) { auto.phase = 'start'; return; }
+        if (auto.t > AUTO_WAIT_H) autoAbort(`${st.shortName} no recibió presión de aspiración en 40 min (asp ${fmt(pIn)} kg/cm², mínimo ${fmt(thr)})`);
+        return;
+      }
+      if (auto.phase === 'start') {
+        let n = 0;
+        for (const pid of auto.picked) {
+          const p = st.pumps.find((q) => q.id === pid);
+          if (!p || p.online) continue;
+          const bad = equip && !isB(p) ? equip.pumpPermissives(id, pid).filter((x) => !x[1]) : [];
+          if (bad.length) { evLog(`Arranque automático: ${p.name} no arranca, falta ${bad.map((x) => x[0].toLowerCase()).join(', ')}`); continue; }
+          sim.setPump(id, pid, true); n++;
+        }
+        if (!n && !(st.pumps || []).some((p) => p.online)) { autoAbort(`${st.shortName}: ninguna bomba cumplió los permisivos`); return; }
+        evLog(`Arranque automático: ${st.shortName} en marcha con ${n} bomba(s) (asp ${fmt(s.pressuresIn[id])} kg/cm²)`);
+        auto.phase = 'settle'; auto.t = 0; return;
+      }
+      if (auto.phase === 'settle' && auto.t >= AUTO_SETTLE_H) {
+        auto.i++; auto.phase = 'prep'; auto.t = 0;
+        if (auto.i >= auto.list.length) {
+          evLog('ARRANQUE AUTOMÁTICO DE LÍNEA completo: todas las estaciones en marcha');
+          auto = null;
+          if (s.autoRamp !== false) startRamp('arranque automático de línea'); else app.toast('Línea en marcha. Subí al despacho con la rampa');
+        }
+      }
+    }
+    function autoStatus() {
+      if (!auto) return '';
+      const id = auto.list[auto.i], st = sim.stationById(id), s = S();
+      const what = auto.phase === 'wait' ? (auto.i === 0 ? 'abriendo válvulas' : `esperando aspiración ${fmt(s.pressuresIn[id])} / ${fmt(Math.max(2, st.pAspMinKgCm2 || 3))} kg/cm²`) : auto.phase === 'settle' ? 'estabilizando' : 'arrancando';
+      return `<div class="ar-auto"><b>Arranque automático</b> · paso ${auto.i + 1} de ${auto.list.length}: <b>${esc(st.shortName)}</b> ${what} <span>${auto.list.map((k, j) => `<i class="${j < auto.i ? 'ok' : j === auto.i ? 'now' : ''}">${esc(sim.stationById(k).shortName)}</i>`).join('')}</span></div>`;
+    }
     // estrategia global: sin cabecera no tiene sentido seguir bombeando aguas abajo
     let gsT = 0, gsDone = false;
     function globalStrategy(dtH) {
@@ -172,7 +261,7 @@
       let h = `<div class="ar-top"><div><h3 class="sc-h3">Reinicio y arranque de línea <span>orden recomendado: cabecera primero y después cada estación aguas abajo cuando le llega presión de aspiración</span></h3>
         <div class="ar-line"><span>Cabecera <b class="${headRun ? 'ok' : 'bad'}">${headRun ? 'en servicio' : 'parada'}</b></span><span>Caudal de línea <b>${fmt(s.lineFlow, 0)} m³/h</b></span><span>SP <b>${fmt(s.globalFlowSetpoint, 0)} m³/h</b></span><span>Despacho <b>${fmt(dispQ(), 0)} m³/h</b></span>${s.flowTarget != null ? `<span>Rampa <b>faltan ${fmt(Math.abs(s.flowTarget - s.globalFlowSetpoint) / RAMP, 0)} min</b></span>` : ''}</div>
         <div class="ar-ctl"><label>Caudal de arranque <input type="number" id="ar-q0" step="10" value="${fmt(startQ(), 0)}"> m³/h</label><button type="button" class="sc-btn" data-ar="q0">Aplicar caudal de arranque</button><label>Despacho <input type="number" id="ar-qd" step="10" value="${fmt(dispQ(), 0)}"> m³/h</label><button type="button" class="sc-btn exec" data-ar="ramp">Subir en rampa al despacho</button><label class="ar-chk"><input type="checkbox" id="ar-auto" ${s.autoRamp === false ? '' : 'checked'}> rampa automática al arrancar</label></div>
-        <div class="me-btns"><button type="button" class="sc-btn" data-ar="closeall">Cerrar todas las descargas de la línea</button><button type="button" class="sc-btn exec" data-ar="resetall">Reiniciar todas las estaciones disparadas</button></div></div></div>`;
+        ${autoStatus()}<div class="me-btns"><button type="button" class="sc-btn ${auto ? '' : 'exec'}" data-ar="auto">${auto ? 'Cancelar arranque automático' : 'Arranque automático de línea'}</button><button type="button" class="sc-btn" data-ar="closeall">Cerrar todas las descargas de la línea</button><button type="button" class="sc-btn exec" data-ar="resetall">Reiniciar todas las estaciones disparadas</button></div></div></div>`;
       h += '<div class="ar-list">';
       for (const id of ST) {
         const st = sim.stationById(id);
@@ -310,9 +399,11 @@
     }
 
     // ---------------- sub-vistas ----------------
+    const LIC = () => global.OBLIC || null;
+    if (LIC() && LIC().on) LIC().on(() => { nav(); render(true); });
     function nav() {
       const items = [['principal', 'Principal'], ['estacion', 'Estación (P&ID)'], ['control', 'Control PID'], ['arranque', 'Reinicio y arranque'], ['equipos', 'Equipos'], ['integridad', 'Integridad'], ['terminal', 'Terminal ' + TN], ['medicion', 'Medición'], ['cierres', 'Cierres OMNI'], ['custody', 'Custody'], ['alarmlog', 'Hist. alarmas'], ['eventos', 'Eventos y fallas']].concat(CUST ? [] : [['clasica', 'Consola clásica']]).filter(([k]) => (k !== 'equipos' || equip) && (k !== 'control' || pidfp));
-      $('ing-nav').innerHTML = items.map(([k, t]) => `<button type="button" class="${k === sub ? 'on' : ''}" data-sub="${k}">${t}</button>`).join('');
+      $('ing-nav').innerHTML = items.map(([k, t]) => `<button type="button" class="${k === sub ? 'on' : ''}" data-sub="${k}">${t}${LIC() && !LIC().can('scada:' + k) ? ' <i class="lic-lk">🔒</i>' : ''}</button>`).join('');
     }
     function setSub(k) {
       sub = k;
@@ -599,7 +690,7 @@
       h += `<h3 class="sc-h3">Estrategia global</h3>` + (pb.length ? '<ul class="ev-pb">' + pb.map((x) => `<li><label><input type="checkbox" data-pb="${esc(x.id)}" ${x.done ? 'checked' : ''}> ${esc(x.text)}</label></li>`).join('') + '</ul>' : '<p class="me-empty">Se activa con la primera falla.</p>');
       h += `<h3 class="sc-h3">Registro</h3><div class="ev-log">${ev.log.length ? ev.log.map((l) => `<div>${esc(l)}</div>`).join('') : '<div class="me-empty">Sin eventos.</div>'}</div>`;
       h += '</div><div class="ev-right">';
-      if (faults) h += faults.formHtml() + faults.activeHtml();
+      if (faults) h += (LIC() && !LIC().can('fallas') ? LIC().lockHtml('fallas', 'Arriba tenés los eventos rápidos de ejemplo.') : faults.formHtml()) + faults.activeHtml();
       h += `<details class="ev-quick" ${faults ? '' : 'open'}><summary>Escenarios guiados rápidos</summary>`;
       for (const gname of groups) {
         h += `<h3 class="sc-h3">${gname}</h3><div class="ev-cards">` + EVENTS.filter((e) => e.g === gname).map((e) => `<div class="ev-card"><b>${esc(e.t)}</b><p>${esc(e.d)}</p><button type="button" class="sc-btn" data-ev="${e.k}">Disparar</button></div>`).join('') + '</div>';
@@ -618,7 +709,7 @@
     function render(force) {
       if (sub === 'clasica') return;
       if (!force && (root.contains(document.activeElement) && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'SELECT'))) return;
-      const html = sub === 'arranque' ? arranqueView() : sub === 'control' && pidfp ? controlView() : sub === 'equipos' && equip ? equip.render() : ext && ext.render[sub] ? ext.render[sub]() : sub === 'principal' ? principal() : sub === 'estacion' ? pid() : sub === 'medicion' ? medicion() : eventos();
+      const html = LIC() && !LIC().can('scada:' + sub) ? LIC().lockHtml('scada:' + sub) : sub === 'arranque' ? arranqueView() : sub === 'control' && pidfp ? controlView() : sub === 'equipos' && equip ? equip.render() : ext && ext.render[sub] ? ext.render[sub]() : sub === 'principal' ? principal() : sub === 'estacion' ? pid() : sub === 'medicion' ? medicion() : eventos();
       if (sub === 'medicion' && !force && proving) {
         // no pisar el panel del prover mientras corre
         const keep = $('me-prover');
@@ -675,6 +766,7 @@
         if (da.ar === 'ramp') { const q = Number($('ar-qd').value); if (isFinite(q)) { s.dispatchQ = Math.max(0, Math.min(QMAX, q)); sim.rampFlowTo(s.dispatchQ); evLog(`Subida en rampa al despacho ${fmt(s.dispatchQ, 0)} m³/h a ${RAMP} m³/h por minuto`); } }
         if (da.ar === 'closeall' && equip) { ST.forEach((id) => equip.closeAllMovs(id)); app.toast('Cerrando todas las descargas (1 min)'); }
         if (da.ar === 'resetall') resetAll();
+        if (da.ar === 'auto') autoStart();
         render(true); return;
       }
       const g2 = e.target.closest('[data-goeq],[data-gofp],[data-closeall],[data-esdreset]');
@@ -758,7 +850,7 @@
     const ext = global.createIngExt ? global.createIngExt(app, { meters, qInd, evLog, setSub: (k) => setSub(k) }) : null;
     const equip = global.createEquip ? global.createEquip(app, { TAGN, NAME, ev, evLog }) : null;
     if (equip && app.alarms && app.alarms.addSource) app.alarms.addSource(() => equip.alarms());
-    if (equip) equip.onStart = (sid, p) => { if (S().stationRamp && S().stationRamp.__init) return; startRamp(`arranque de ${p.name} en ${sim.stationById(sid).shortName}`); };
+    if (equip) equip.onStart = (sid, p) => { if (S().stationRamp && S().stationRamp.__init) return; if (auto) return; startRamp(`arranque de ${p.name} en ${sim.stationById(sid).shortName}`); };
     const pidfp = global.createPidFp ? global.createPidFp(app, { equip: () => equip, evLog, stv: (id) => stv(id), MAOP, QMAX }) : null;
     const faults = global.createFaults ? global.createFaults(app, { ev, evLog, equip: () => equip }) : null;
     nav();
@@ -779,7 +871,7 @@
       if (equip) equip.update();
       if (faults) faults.tick(dt);
       if (pidfp) pidfp.update();
-      if (dtH > 0) globalStrategy(dtH);
+      if (dtH > 0) { globalStrategy(dtH); autoTick(dtH); }
       eventTick();
       provingStep();
       if (ext) ext.update();
@@ -788,7 +880,7 @@
       if (acc > 0.5) { acc = 0; render(false); }
     }
 
-    return { update, resetEvents() { Object.keys(ev.elec).forEach((k) => delete ev.elec[k]); ev.filter = {}; ev.n2 = {}; ev.esd = {}; ev.comm = {}; if (equip) equip.reset(); if (faults) faults.reset(); if (pidfp) pidfp.reset(); }, meters, equip, ev, get faults() { return faults; } };
+    return { update, resetEvents() { Object.keys(ev.elec).forEach((k) => delete ev.elec[k]); ev.filter = {}; ev.n2 = {}; ev.esd = {}; ev.comm = {}; if (equip) equip.reset(); if (faults) faults.reset(); if (pidfp) pidfp.reset(); auto = null; }, meters, autoStart, get auto() { return auto; }, equip, ev, get faults() { return faults; } };
   }
 
   global.createIng = createIng;

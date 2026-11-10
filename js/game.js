@@ -149,6 +149,7 @@
     }
 
     function start(mode) {
+      if (mode !== 'mision' && global.OBLIC && !global.OBLIC.can('turno')) { app.toast('El turno de 12 horas es parte de la licencia Individual o Institucional'); global.OBLIC.openPlans(); return; }
       const pool = incidentPool(sim);
       const isDay = mode === 'mision';
       const r = rng(isDay ? dayKey() : (Date.now() & 0xffffffff));
