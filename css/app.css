@@ -769,3 +769,12 @@ body[data-ing-sub="clasica"] .ing-body { display: none; }
 .fp-ramp input, .fp-tune input { background: #fff; color: #111; border: 1px solid #777; color-scheme: light; }
 .fp-mini, .fp-tog, .fp-stepcol button { color: #111; }
 .fp-tog.on { color: #fff; }
+/* tanque sumidero */
+.eq-svg circle.eq-lamp { fill: #9a9cb5; stroke: #1d2a6b; stroke-width: 1; }
+.eq-svg circle.eq-lamp.warn { fill: #f5c400; }
+.eq-svg circle.eq-lamp.bad { fill: #e0201b; }
+.eq-tank { fill: #f4f5ff; stroke: #1d2a6b; stroke-width: 2; }
+.eq-tank-l { fill: #8a5a2b; opacity: 0.85; }
+.eq-pump { fill: #9a9cb5; stroke: #1d2a6b; stroke-width: 2; }
+.eq-pump.run { fill: #2ecc40; }
+.eq-pump.bad { fill: #e0201b; }
