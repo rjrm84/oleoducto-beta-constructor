@@ -3,20 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Constructor de ductos · Oleoducto Beta</title>
+<title>Oleoducto Constructor · diseñá y simulá tu oleoducto</title>
 <meta name="description" content="Armá un oleoducto a medida sobre el mapa real: trazado, altimetría, caño, estaciones, bombas, válvulas, medición y destino. Después simulalo con vista 3D y SCADA.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="css/builder.css?v=18">
+<link rel="stylesheet" href="css/builder.css?v=19">
 </head>
 <body>
 <div class="b-shell">
   <header class="b-top">
     <div class="b-brand">
-      <span class="b-brand-name">Constructor de ductos</span>
-      <span class="b-brand-sub">Oleoducto Beta · ductos a medida</span>
+      <span class="b-brand-name">Oleoducto Constructor</span>
+      <span class="b-brand-sub">ductos y plantas a medida · simulador y SCADA</span>
     </div>
     <nav class="b-topnav" aria-label="Navegación">
       <a href="#" id="nav-lib" class="b-tlink">Mis ductos</a>
@@ -33,8 +33,8 @@
   <!-- Biblioteca -->
   <main class="b-lib" id="lib">
     <section class="b-lib-hero">
-      <h1>Armá un oleoducto desde cero y simulalo</h1>
-      <p>Dibujá el trazado sobre el mapa, bajá la altimetría real, elegí el caño, y dejá que el constructor proponga estaciones, bombas, válvulas, medición y trampas de pig. Después lo operás con la vista 3D, la sala de control, el SCADA, integridad y custody.</p>
+      <h1>Tu oleoducto, simulado en minutos</h1>
+      <p>Importá la traza de tu ducto (KMZ, KML, GPX o GeoJSON) o dibujala sobre el mapa, bajá la altimetría real, elegí el caño y dejá que el constructor proponga estaciones, bombas, válvulas, medición y trampas de pig. Sumá tus plantas (PTC, playas de tanques, entregas) y operalo con vista 3D, sala de control, SCADA, fallas programables y evaluaciones del personal. En el navegador, sin instalar nada.</p>
       <div class="b-lib-btns">
         <button type="button" class="b-btn b-btn-hot" id="lib-new">Nuevo ducto</button>
         <button type="button" class="b-btn" id="lib-example">Cargar ejemplo (Añelo → puerto)</button>
@@ -57,11 +57,11 @@
 <div class="b-toast" id="b-toast" role="status"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="js/lic.js?v=18"></script>
+<script src="js/lic.js?v=19"></script>
 <script>window.OB_LINKS={sim:"simulador.html",builder:"index.html"};</script>
-<script src="js/pipeline-gen.js?v=18"></script>
-<script src="js/sim.js?v=18"></script>
-<script src="js/geo.js?v=18"></script>
-<script src="js/builder.js?v=18"></script>
+<script src="js/pipeline-gen.js?v=19"></script>
+<script src="js/sim.js?v=19"></script>
+<script src="js/geo.js?v=19"></script>
+<script src="js/builder.js?v=19"></script>
 </body>
 </html>
